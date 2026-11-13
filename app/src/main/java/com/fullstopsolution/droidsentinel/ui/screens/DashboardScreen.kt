@@ -165,7 +165,11 @@ fun DashboardScreen(
                             title = "Network Posture",
                             statusText = assessment.networkAudit.connectionType,
                             statusColor = if (assessment.networkAudit.isVpnActive) StatusSecure else StatusInfo,
-                            detail = if (assessment.networkAudit.isPrivateDnsActive) "Private DNS DoT Active" else "No VPN / Plaintext DNS",
+                            detail = if (assessment.networkAudit.isPrivateDnsActive) {
+                                "Strict Private DNS configured"
+                            } else {
+                                "Private DNS may fall back to plaintext"
+                            },
                             onClick = { onNavigateTab(4) }
                         )
                     }

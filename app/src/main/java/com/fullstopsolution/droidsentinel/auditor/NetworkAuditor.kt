@@ -8,7 +8,39 @@ import android.provider.Settings
 import com.fullstopsolution.droidsentinel.model.Finding
 import com.fullstopsolution.droidsentinel.model.NetworkAuditResult
 import com.fullstopsolution.droidsentinel.model.Severity
+import java.net.IDN
 import java.net.URI
+
+internal data class PrivateDnsAssessment(
+    val requiresDnsOverTls: Boolean,
+    val finding: Finding
+)
+
+internal fun assessPrivateDnsMode(mode: String): PrivateDnsAssessment {
+    val finding = when {
+        mode.equals("hostname", ignoreCase = true) -> Finding(
+            title = "Strict Private DNS Configured",
+            description = "DNS-over-TLS is required by the configured Private DNS provider; DNS resolution may fail rather than fall back to plaintext.",
+            severity = Severity.SECURE
+        )
+        mode.equals("opportunistic", ignoreCase = true) -> Finding(
+            title = "Opportunistic Private DNS",
+            description = "DNS-over-TLS is attempted when available, but Android may fall back to unencrypted DNS.",
+            severity = Severity.WARNING,
+            recommendation = "Configure a Private DNS provider hostname to require DNS-over-TLS."
+        )
+        else -> Finding(
+            title = "Private DNS Disabled or Unconfigured",
+            description = "DNS lookups may be transmitted unencrypted in plaintext across local gateways.",
+            severity = Severity.WARNING,
+            recommendation = "Enable Private DNS (e.g. dns.google or 1dot1dot1dot1.cloudflare-dns.com) in Network Settings."
+        )
+    }
+    return PrivateDnsAssessment(
+        requiresDnsOverTls = mode.equals("hostname", ignoreCase = true),
+        finding = finding
+    )
+}
 
 object NetworkAuditor {
 
@@ -65,25 +97,8 @@ object NetworkAuditor {
             "unknown"
         }
 
-        val isPrivateDns = privateDnsMode.lowercase() in setOf("hostname", "opportunistic")
-        if (isPrivateDns) {
-            findings.add(
-                Finding(
-                    title = "Private DNS (DoT) Enabled",
-                    description = "DNS queries are encrypted via DNS-over-TLS (mode: $privateDnsMode).",
-                    severity = Severity.SECURE
-                )
-            )
-        } else {
-            findings.add(
-                Finding(
-                    title = "Private DNS Disabled or Unconfigured",
-                    description = "DNS lookups may be transmitted unencrypted in plaintext across local gateways.",
-                    severity = Severity.WARNING,
-                    recommendation = "Enable Private DNS (e.g. dns.google or 1dot1dot1dot1.cloudflare-dns.com) in Network Settings."
-                )
-            )
-        }
+        val privateDnsAssessment = assessPrivateDnsMode(privateDnsMode)
+        findings.add(privateDnsAssessment.finding)
 
         // 3. Captive portal check
         val isCaptive = caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_CAPTIVE_PORTAL) ?: false
@@ -112,7 +127,7 @@ object NetworkAuditor {
             isWifiEncrypted = isWifi,
             wifiSecurityType = if (isWifi) "WPA2/WPA3" else "N/A",
             isVpnActive = isVpnActive,
-            isPrivateDnsActive = isPrivateDns,
+            isPrivateDnsActive = privateDnsAssessment.requiresDnsOverTls,
             findings = findings
         )
     }
@@ -154,15 +169,29 @@ object NetworkAuditor {
             null
         }
 
-        val host = parsed?.host?.lowercase() ?: ""
+        val rawHost = parsed?.host ?: parsed?.rawAuthority?.let(::hostFromAuthority)
+        val host = rawHost?.let(::toAsciiHostname)?.lowercase()
+
+        if (host == null) {
+            findings.add(
+                Finding(
+                    title = "Unable to Verify URL Hostname",
+                    description = "The URL hostname could not be parsed or normalized safely.",
+                    severity = Severity.WARNING,
+                    recommendation = "Do not open the link until its destination can be verified."
+                )
+            )
+        }
+
+        val normalizedHost = host.orEmpty()
 
         // 3. Numeric IPv4 / IPv6 Hostname
-        val isNumericIp = host.matches(Regex("^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}$")) || host.startsWith("[")
+        val isNumericIp = normalizedHost.matches(Regex("^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}$")) || normalizedHost.startsWith("[")
         if (isNumericIp) {
             findings.add(
                 Finding(
                     title = "Raw Numeric IP Hostname",
-                    description = "URL points directly to an IP address ($host) rather than a verified registered domain.",
+                    description = "URL points directly to an IP address ($normalizedHost) rather than a verified registered domain.",
                     severity = Severity.CRITICAL,
                     recommendation = "Legitimate consumer platforms virtually never use direct IP web endpoints."
                 )
@@ -170,11 +199,11 @@ object NetworkAuditor {
         }
 
         // 4. Internationalized Domain / Punycode
-        if (host.startsWith("xn--") || host.contains(".xn--")) {
+        if (normalizedHost.startsWith("xn--") || normalizedHost.contains(".xn--")) {
             findings.add(
                 Finding(
                     title = "Punycode / IDN Homograph Attack Vector",
-                    description = "Hostname uses Punycode ($host), often weaponized to mimic Latin brand names with Cyrillic characters.",
+                    description = "Hostname uses Punycode ($normalizedHost), often weaponized to mimic Latin brand names with Cyrillic characters.",
                     severity = Severity.CRITICAL,
                     recommendation = "Verify character glyphs carefully before navigating."
                 )
@@ -182,11 +211,11 @@ object NetworkAuditor {
         }
 
         // 5. URL Shortener Service
-        if (SHORTENER_DOMAINS.any { host == it || host.endsWith(".$it") }) {
+        if (SHORTENER_DOMAINS.any { normalizedHost == it || normalizedHost.endsWith(".$it") }) {
             findings.add(
                 Finding(
                     title = "URL Shortening Service",
-                    description = "Destination URL is obscured by a redirect service ($host).",
+                    description = "Destination URL is obscured by a redirect service ($normalizedHost).",
                     severity = Severity.WARNING,
                     recommendation = "Unshorten and preview target before opening."
                 )
@@ -194,7 +223,7 @@ object NetworkAuditor {
         }
 
         // 6. Suspicious / Abused TLDs
-        if (SUSPICIOUS_TLDS.any { host.endsWith(it) }) {
+        if (SUSPICIOUS_TLDS.any { normalizedHost.endsWith(it) }) {
             findings.add(
                 Finding(
                     title = "High-Risk Top-Level Domain",
@@ -207,7 +236,7 @@ object NetworkAuditor {
         // 7. Brand Impersonation Subdomain Pattern (e.g. paypal.com.evil.xyz)
         val brands = listOf("paypal", "apple", "google", "samsung", "netflix", "bank", "login", "verify")
         for (brand in brands) {
-            if (host.contains("$brand.") && !host.endsWith("$brand.com") && !host.endsWith("$brand.net")) {
+            if (normalizedHost.contains("$brand.") && !normalizedHost.endsWith("$brand.com") && !normalizedHost.endsWith("$brand.net")) {
                 findings.add(
                     Finding(
                         title = "Brand Spoofing Subdomain Heuristic",
@@ -231,5 +260,25 @@ object NetworkAuditor {
         }
 
         return findings
+    }
+
+    private fun hostFromAuthority(authority: String): String? {
+        val withoutUserInfo = authority.substringAfterLast('@')
+        if (withoutUserInfo.startsWith("[")) {
+            return withoutUserInfo.substringBefore(']') + "]"
+        }
+        val portSeparator = withoutUserInfo.lastIndexOf(':')
+        return if (portSeparator >= 0 && withoutUserInfo.substring(portSeparator + 1).all(Char::isDigit)) {
+            withoutUserInfo.substring(0, portSeparator)
+        } else {
+            withoutUserInfo
+        }.takeIf { it.isNotBlank() }
+    }
+
+    private fun toAsciiHostname(host: String): String? = try {
+        if (host.startsWith("[") && host.endsWith("]")) host
+        else IDN.toASCII(host, IDN.USE_STD3_ASCII_RULES)
+    } catch (_: IllegalArgumentException) {
+        null
     }
 }

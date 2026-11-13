@@ -1,3 +1,5 @@
+import java.io.File
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -19,26 +21,53 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
-    signingConfigs {
-        create("release") {
-            storeFile = file("droidsentinel-release.jks")
-            storePassword = "droidsentinel_sec2026"
-            keyAlias = "droidsentinel"
-            keyPassword = "droidsentinel_sec2026"
-            enableV1Signing = true
-            enableV2Signing = true
-            enableV3Signing = true
-            enableV4Signing = true
+    val releaseStoreFile = providers.environmentVariable("RELEASE_STORE_FILE").orNull
+    val releaseStoreFilePath = releaseStoreFile?.let { file(it).absolutePath }
+    val releaseStorePassword = providers.environmentVariable("RELEASE_STORE_PASSWORD").orNull
+    val releaseKeyAlias = providers.environmentVariable("RELEASE_KEY_ALIAS").orNull
+    val releaseKeyPassword = providers.environmentVariable("RELEASE_KEY_PASSWORD").orNull
+    val releaseSigningConfigured = listOf(
+        releaseStoreFile,
+        releaseStorePassword,
+        releaseKeyAlias,
+        releaseKeyPassword
+    ).all { !it.isNullOrBlank() }
+
+    if (releaseSigningConfigured) {
+        signingConfigs {
+            create("release") {
+                storeFile = File(requireNotNull(releaseStoreFilePath))
+                storePassword = requireNotNull(releaseStorePassword)
+                keyAlias = requireNotNull(releaseKeyAlias)
+                keyPassword = requireNotNull(releaseKeyPassword)
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+                enableV4Signing = true
+            }
         }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("release")
+            if (releaseSigningConfigured) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
-        debug {
-            signingConfig = signingConfigs.getByName("release")
+    }
+
+    tasks.configureEach {
+        if (name == "preReleaseBuild") {
+            doFirst {
+                check(releaseSigningConfigured) {
+                    "Release signing is not configured. Set RELEASE_STORE_FILE, RELEASE_STORE_PASSWORD, " +
+                        "RELEASE_KEY_ALIAS, and RELEASE_KEY_PASSWORD in the protected build environment."
+                }
+                check(File(requireNotNull(releaseStoreFilePath)).isFile) {
+                    "Release keystore not found at RELEASE_STORE_FILE. Provide the protected keystore file."
+                }
+            }
         }
     }
 

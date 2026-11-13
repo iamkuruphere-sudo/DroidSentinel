@@ -15,7 +15,7 @@ DroidSentinel is the Android mobile companion to [MacSentinel](https://github.co
 | **Release APK** | `DroidSentinel-release.apk` (v1.0.0) |
 | **Package ID** | `com.fullstopsolution.droidsentinel` |
 | **Target SDK** | Android 17 (API 37) / Min SDK: Android 13 (API 33) |
-| **Signing Fingerprint (SHA-256)** | `40:83:42:03:B8:15:A4:3E:70:78:2F:E1:6D:10:BC:DD:84:28:C3:C4:A8:7A:54:83:4D:42:97:B3:91:22:99:30` |
+| **Signing Key Status** | Previously used release key is compromised; verify signing identity with the owner before trusting existing artifacts. |
 | **APK Binary Checksum (SHA-256)** | `a9cb7d7da8c4b4858bfdb6440ed4389abf35bde1d36788eff94b2df59d419634` |
 | **GitHub Releases** | [DroidSentinel Releases](https://github.com/iamkuruphere-sudo/DroidSentinel/releases) |
 | **Official Ecosystem** | [Fullstop Solution Mobile & Desktop Suites](https://www.fullstopsolution.in) |
@@ -51,7 +51,7 @@ DroidSentinel is the Android mobile companion to [MacSentinel](https://github.co
 
 ### 4. Network & Link Phishing Defense
 * **Transport Encryption**: Audits Wi-Fi encryption status (WPA2/WPA3), active VPN tunnels (`TRANSPORT_VPN`), and captive portal interception.
-* **Private DNS (DNS-over-TLS)**: Detects whether device DNS queries are protected against ISP/LAN eavesdropping.
+* **Private DNS (DNS-over-TLS)**: Distinguishes strict hostname mode from opportunistic mode, which can fall back to plaintext DNS.
 * **Interactive Phishing Heuristic Engine**:
   * Insecure HTTP cleartext warnings.
   * Deceptive `@` redirect syntax detection (`https://bank.com@phish.xyz`).
@@ -108,9 +108,13 @@ cd DroidSentinel
 # Build debug APK
 ./gradlew assembleDebug
 
-# Build and sign release APK
+# Build and sign a release APK (configure protected signing inputs first)
 ./gradlew assembleRelease
 ```
+
+Release signing is read from the protected build environment variables `RELEASE_STORE_FILE`, `RELEASE_STORE_PASSWORD`, `RELEASE_KEY_ALIAS`, and `RELEASE_KEY_PASSWORD`. Supply all four only through a secret manager or another protected local/CI environment; never commit the keystore or credentials. Release builds fail with an actionable error if the signing configuration or keystore file is missing. Debug builds use the standard Android debug key.
+
+The previously tracked release keystore has been removed from the current source tree. Its copies remain in Git history, and this change does not rotate the key. The owner must arrange actual app-signing key rotation or a Google Play App Signing upgrade and assess existing distributed APKs.
 
 The signed release APK will be generated at:
 `app/build/outputs/apk/release/app-release.apk`

@@ -11,6 +11,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import com.fullstopsolution.droidsentinel.MainActivity
+import com.fullstopsolution.droidsentinel.auditor.AccessibilityServiceDetector
 
 class InstallMonitorReceiver : BroadcastReceiver() {
 
@@ -25,10 +26,15 @@ class InstallMonitorReceiver : BroadcastReceiver() {
         val pm = context.packageManager
         val pkgInfo = try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                pm.getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(PackageManager.GET_PERMISSIONS.toLong()))
+                pm.getPackageInfo(
+                    packageName,
+                    PackageManager.PackageInfoFlags.of(
+                        (PackageManager.GET_PERMISSIONS or PackageManager.GET_SERVICES).toLong()
+                    )
+                )
             } else {
                 @Suppress("DEPRECATION")
-                pm.getPackageInfo(packageName, PackageManager.GET_PERMISSIONS)
+                pm.getPackageInfo(packageName, PackageManager.GET_PERMISSIONS or PackageManager.GET_SERVICES)
             }
         } catch (_: Exception) {
             return
@@ -53,7 +59,9 @@ class InstallMonitorReceiver : BroadcastReceiver() {
         val isSideloaded = installer == null || (installer != "com.android.vending" && installer != "com.sec.android.app.samsungapps")
         val permissions = pkgInfo.requestedPermissions?.toSet() ?: emptySet()
         val hasOverlay = permissions.contains("android.permission.SYSTEM_ALERT_WINDOW")
-        val hasAccessibility = permissions.contains("android.permission.BIND_ACCESSIBILITY_SERVICE")
+        val hasAccessibility = AccessibilityServiceDetector.declaresAccessibilityBinding(
+            pkgInfo.services?.map { it.permission }
+        )
         val hasSms = permissions.any { it.contains("SMS") }
 
         if (isSideloaded || hasOverlay || hasAccessibility || hasSms) {
