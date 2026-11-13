@@ -8,6 +8,7 @@ import android.provider.Settings
 import com.fullstopsolution.droidsentinel.model.Finding
 import com.fullstopsolution.droidsentinel.model.NetworkAuditResult
 import com.fullstopsolution.droidsentinel.model.Severity
+import java.net.IDN
 import java.net.URI
 
 object NetworkAuditor {
@@ -58,31 +59,46 @@ object NetworkAuditor {
             )
         }
 
-        // 2. Private DNS (DNS-over-TLS)
-        val privateDnsMode = try {
+        // 2. Private DNS (DNS-over-TLS) - Differentiate Strict vs. Opportunistic modes
+        val rawPrivateDnsMode = try {
             Settings.Global.getString(context.contentResolver, "private_dns_mode") ?: "off"
         } catch (_: Exception) {
             "unknown"
         }
 
-        val isPrivateDns = privateDnsMode.lowercase() in setOf("hostname", "opportunistic")
-        if (isPrivateDns) {
-            findings.add(
-                Finding(
-                    title = "Private DNS (DoT) Enabled",
-                    description = "DNS queries are encrypted via DNS-over-TLS (mode: $privateDnsMode).",
-                    severity = Severity.SECURE
+        val (isPrivateDnsActive, dnsDisplayMode) = when (rawPrivateDnsMode.lowercase()) {
+            "hostname" -> {
+                findings.add(
+                    Finding(
+                        title = "Strict Private DNS (DoT) Active",
+                        description = "DNS queries are strictly encrypted via DNS-over-TLS to a designated provider and will not fall back to plaintext.",
+                        severity = Severity.SECURE
+                    )
                 )
-            )
-        } else {
-            findings.add(
-                Finding(
-                    title = "Private DNS Disabled or Unconfigured",
-                    description = "DNS lookups may be transmitted unencrypted in plaintext across local gateways.",
-                    severity = Severity.WARNING,
-                    recommendation = "Enable Private DNS (e.g. dns.google or 1dot1dot1dot1.cloudflare-dns.com) in Network Settings."
+                true to "Strict DoT"
+            }
+            "opportunistic" -> {
+                findings.add(
+                    Finding(
+                        title = "Opportunistic Private DNS (Automatic Mode)",
+                        description = "Private DNS is set to Automatic. Android attempts DNS-over-TLS on port 853, but will silently fall back to unencrypted plaintext DNS if port 853 is blocked by local firewalls or captive portals.",
+                        severity = Severity.WARNING,
+                        recommendation = "Specify a designated Private DNS provider hostname in Android Settings to prevent unencrypted plaintext fallback."
+                    )
                 )
-            )
+                true to "Opportunistic (Fallback Risk)"
+            }
+            else -> {
+                findings.add(
+                    Finding(
+                        title = "Private DNS Disabled or Unconfigured",
+                        description = "DNS lookups are transmitted unencrypted in plaintext across local gateways and ISPs.",
+                        severity = Severity.WARNING,
+                        recommendation = "Enable Private DNS in Android Network Settings to encrypt DNS queries."
+                    )
+                )
+                false to "Disabled / Plaintext"
+            }
         }
 
         // 3. Captive portal check
@@ -102,6 +118,7 @@ object NetworkAuditor {
         var wifiSsid: String? = null
         if (isWifi) {
             val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+            @Suppress("DEPRECATION")
             val info = wifiManager?.connectionInfo
             wifiSsid = info?.ssid?.replace("\"", "")
         }
@@ -112,7 +129,8 @@ object NetworkAuditor {
             isWifiEncrypted = isWifi,
             wifiSecurityType = if (isWifi) "WPA2/WPA3" else "N/A",
             isVpnActive = isVpnActive,
-            isPrivateDnsActive = isPrivateDns,
+            isPrivateDnsActive = isPrivateDnsActive,
+            privateDnsMode = dnsDisplayMode,
             findings = findings
         )
     }
@@ -124,19 +142,23 @@ object NetworkAuditor {
 
         if (trimmed.isEmpty()) return findings
 
-        // 1. HTTPS Check
-        if (!trimmed.startsWith("https://", ignoreCase = true)) {
+        // 1. Protocol Check
+        val lowerUrl = trimmed.lowercase()
+        val isHttps = lowerUrl.startsWith("https://")
+        val isHttp = lowerUrl.startsWith("http://")
+
+        if (!isHttps) {
             findings.add(
                 Finding(
-                    title = "Insecure Cleartext Protocol (HTTP)",
-                    description = "Link does not enforce TLS encryption; traffic is vulnerable to MITM manipulation.",
+                    title = if (isHttp) "Insecure Cleartext Protocol (HTTP)" else "Missing Secure Protocol Scheme",
+                    description = if (isHttp) "Link does not enforce TLS encryption; traffic is vulnerable to MITM manipulation." else "Link lacks https:// scheme.",
                     severity = Severity.CRITICAL,
                     recommendation = "Do not enter credentials or confidential data on unencrypted HTTP pages."
                 )
             )
         }
 
-        // 2. Misleading '@' sign redirect
+        // 2. Deceptive '@' Authority Redirect
         if (trimmed.contains("@")) {
             findings.add(
                 Finding(
@@ -148,70 +170,88 @@ object NetworkAuditor {
             )
         }
 
-        val parsed = try {
-            URI(trimmed)
-        } catch (_: Exception) {
-            null
+        // 3. Robust Host Extraction (including raw Unicode hosts)
+        // Extract authority part via regex to prevent URI(rawUrl) failure on raw Unicode characters
+        val hostMatch = Regex("""^(?:https?://)?([^/?#]+)""", RegexOption.IGNORE_CASE).find(trimmed)
+        val rawAuthority = hostMatch?.groupValues?.get(1)?.trim() ?: ""
+        val hostPart = rawAuthority.substringAfterLast("@").substringBefore(":")
+
+        if (hostPart.isEmpty()) {
+            findings.add(
+                Finding(
+                    title = "Malformed Destination Host",
+                    description = "The URL does not contain a parseable destination hostname.",
+                    severity = Severity.CRITICAL,
+                    recommendation = "Do not follow malformed links."
+                )
+            )
+            return findings
         }
 
-        val host = parsed?.host?.lowercase() ?: ""
+        // 4. Unicode & Punycode (IDN Homograph) Detection
+        val hasNonAscii = hostPart.any { it.code > 127 }
+        val asciiHost = try {
+            IDN.toASCII(hostPart, IDN.ALLOW_UNASSIGNED).lowercase()
+        } catch (_: Exception) {
+            hostPart.lowercase()
+        }
 
-        // 3. Numeric IPv4 / IPv6 Hostname
-        val isNumericIp = host.matches(Regex("^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}$")) || host.startsWith("[")
+        val isPunycode = asciiHost.startsWith("xn--") || asciiHost.contains(".xn--")
+        if (hasNonAscii || isPunycode) {
+            findings.add(
+                Finding(
+                    title = "Punycode / IDN Homograph Attack Vector",
+                    description = "Hostname contains internationalized Unicode characters or Punycode encoding ($hostPart -> $asciiHost), often weaponized to mimic legitimate brand names with look-alike glyphs (e.g. Cyrillic vs Latin).",
+                    severity = Severity.CRITICAL,
+                    recommendation = "Reject or scrutinize characters closely. Attackers register look-alike domains to deceive users."
+                )
+            )
+        }
+
+        // 5. Numeric IPv4 / IPv6 Hostname
+        val isNumericIp = asciiHost.matches(Regex("^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}$")) || asciiHost.startsWith("[")
         if (isNumericIp) {
             findings.add(
                 Finding(
                     title = "Raw Numeric IP Hostname",
-                    description = "URL points directly to an IP address ($host) rather than a verified registered domain.",
+                    description = "URL points directly to an IP address ($asciiHost) rather than a verified registered domain.",
                     severity = Severity.CRITICAL,
                     recommendation = "Legitimate consumer platforms virtually never use direct IP web endpoints."
                 )
             )
         }
 
-        // 4. Internationalized Domain / Punycode
-        if (host.startsWith("xn--") || host.contains(".xn--")) {
-            findings.add(
-                Finding(
-                    title = "Punycode / IDN Homograph Attack Vector",
-                    description = "Hostname uses Punycode ($host), often weaponized to mimic Latin brand names with Cyrillic characters.",
-                    severity = Severity.CRITICAL,
-                    recommendation = "Verify character glyphs carefully before navigating."
-                )
-            )
-        }
-
-        // 5. URL Shortener Service
-        if (SHORTENER_DOMAINS.any { host == it || host.endsWith(".$it") }) {
+        // 6. URL Shortener Service
+        if (SHORTENER_DOMAINS.any { asciiHost == it || asciiHost.endsWith(".$it") }) {
             findings.add(
                 Finding(
                     title = "URL Shortening Service",
-                    description = "Destination URL is obscured by a redirect service ($host).",
+                    description = "Destination URL is obscured by a redirect service ($asciiHost).",
                     severity = Severity.WARNING,
                     recommendation = "Unshorten and preview target before opening."
                 )
             )
         }
 
-        // 6. Suspicious / Abused TLDs
-        if (SUSPICIOUS_TLDS.any { host.endsWith(it) }) {
+        // 7. Suspicious / Abused TLDs
+        if (SUSPICIOUS_TLDS.any { asciiHost.endsWith(it) }) {
             findings.add(
                 Finding(
                     title = "High-Risk Top-Level Domain",
-                    description = "Domain resides on a TLD frequently associated with automated phishing campaigns.",
+                    description = "Domain resides on a TLD ($asciiHost) frequently associated with automated phishing campaigns.",
                     severity = Severity.WARNING
                 )
             )
         }
 
-        // 7. Brand Impersonation Subdomain Pattern (e.g. paypal.com.evil.xyz)
-        val brands = listOf("paypal", "apple", "google", "samsung", "netflix", "bank", "login", "verify")
+        // 8. Brand Impersonation Subdomain Pattern (e.g. paypal.com.evil.xyz)
+        val brands = listOf("paypal", "apple", "google", "samsung", "netflix", "microsoft", "amazon", "bank", "login", "verify")
         for (brand in brands) {
-            if (host.contains("$brand.") && !host.endsWith("$brand.com") && !host.endsWith("$brand.net")) {
+            if (asciiHost.contains("$brand.") && !asciiHost.endsWith("$brand.com") && !asciiHost.endsWith("$brand.net") && !asciiHost.endsWith("$brand.org")) {
                 findings.add(
                     Finding(
                         title = "Brand Spoofing Subdomain Heuristic",
-                        description = "Hostname mimics '$brand' in subdomain prefix while hosted on a distinct domain.",
+                        description = "Hostname mimics '$brand' in subdomain prefix while hosted on a distinct domain ($asciiHost).",
                         severity = Severity.CRITICAL,
                         recommendation = "Likely deceptive phishing domain masquerading as a reputable service."
                     )

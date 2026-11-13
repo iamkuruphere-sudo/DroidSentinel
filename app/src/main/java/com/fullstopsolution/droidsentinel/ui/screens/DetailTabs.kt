@@ -370,7 +370,7 @@ fun NetworkTab(assessment: CompleteSecurityAssessment?) {
                         Text("Active Interface Posture", color = TextPrimary, fontWeight = FontWeight.Bold)
                         IntegrityRow("Transport Type", net.connectionType, true)
                         IntegrityRow("VPN Encryption Tunnel", if (net.isVpnActive) "PROTECTED (VPN Active)" else "DIRECT (No VPN)", net.isVpnActive)
-                        IntegrityRow("Private DNS (DoT)", if (net.isPrivateDnsActive) "ENCRYPTED" else "PLAINTEXT / OFF", net.isPrivateDnsActive)
+                        IntegrityRow("Private DNS Mode", net.privateDnsMode, net.privateDnsMode.startsWith("Strict"))
                     }
                 }
             }

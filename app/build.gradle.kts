@@ -19,26 +19,47 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    // Release signing credentials must be provided via environment variables or gradle properties.
+    // Credentials and keystores are never hardcoded or tracked in version control.
+    val releaseKeystorePath: String? = System.getenv("RELEASE_KEYSTORE_PATH")
+        ?: project.findProperty("RELEASE_KEYSTORE_PATH") as? String
+    val releaseKeystorePassword: String? = System.getenv("RELEASE_KEYSTORE_PASSWORD")
+        ?: project.findProperty("RELEASE_KEYSTORE_PASSWORD") as? String
+    val releaseKeyAlias: String? = System.getenv("RELEASE_KEY_ALIAS")
+        ?: project.findProperty("RELEASE_KEY_ALIAS") as? String
+    val releaseKeyPassword: String? = System.getenv("RELEASE_KEY_PASSWORD")
+        ?: project.findProperty("RELEASE_KEY_PASSWORD") as? String
+
+    val isReleaseSigningConfigured = !releaseKeystorePath.isNullOrEmpty() &&
+            !releaseKeystorePassword.isNullOrEmpty() &&
+            !releaseKeyAlias.isNullOrEmpty() &&
+            !releaseKeyPassword.isNullOrEmpty() &&
+            file(releaseKeystorePath).exists()
+
     signingConfigs {
-        create("release") {
-            storeFile = file("droidsentinel-release.jks")
-            storePassword = "droidsentinel_sec2026"
-            keyAlias = "droidsentinel"
-            keyPassword = "droidsentinel_sec2026"
-            enableV1Signing = true
-            enableV2Signing = true
-            enableV3Signing = true
-            enableV4Signing = true
+        if (isReleaseSigningConfigured) {
+            create("release") {
+                storeFile = file(releaseKeystorePath!!)
+                storePassword = releaseKeystorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+                enableV4Signing = true
+            }
         }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("release")
+            if (isReleaseSigningConfigured) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
         debug {
-            signingConfig = signingConfigs.getByName("release")
+            // Standard debug signing identity; never sign debug builds with production keys
         }
     }
 

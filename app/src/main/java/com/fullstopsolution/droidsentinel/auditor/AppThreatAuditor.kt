@@ -6,6 +6,7 @@ import android.content.pm.ApplicationInfo
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.os.Build
+import android.provider.Settings
 import com.fullstopsolution.droidsentinel.model.AppAuditResult
 import com.fullstopsolution.droidsentinel.model.AppThreatInfo
 import com.fullstopsolution.droidsentinel.model.Finding
@@ -34,7 +35,15 @@ object AppThreatAuditor {
         // Discover boot-completed receivers
         val bootPackages = queryBootReceivers(pm)
 
-        val flags = PackageManager.GET_PERMISSIONS or PackageManager.GET_META_DATA
+        // Query enabled accessibility services in system settings
+        val enabledAccessibilityServices = try {
+            Settings.Secure.getString(context.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: ""
+        } catch (_: Exception) {
+            ""
+        }
+
+        // Include GET_SERVICES so declared service permissions are visible
+        val flags = PackageManager.GET_PERMISSIONS or PackageManager.GET_META_DATA or PackageManager.GET_SERVICES
         val packages: List<PackageInfo> = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             pm.getInstalledPackages(PackageManager.PackageInfoFlags.of(flags.toLong()))
         } else {
@@ -59,7 +68,7 @@ object AppThreatAuditor {
             val isBootCompleted = bootPackages.contains(pkg.packageName)
 
             val permissions = pkg.requestedPermissions?.toList() ?: emptyList()
-            val dangerousPerms = permissions.filter { isDangerousPermission(it) }
+            val dangerousPerms = permissions.filter { isDangerousPermission(it) }.toMutableList()
 
             val appRiskFindings = mutableListOf<Finding>()
             var riskScore = 0
@@ -119,14 +128,31 @@ object AppThreatAuditor {
                 )
             }
 
-            // 5. Permission Clustering: Accessibility Abuse
-            if (permissions.contains("android.permission.BIND_ACCESSIBILITY_SERVICE")) {
-                riskScore += 30
+            // 5. Accessibility Service Hook: check declared <service android:permission>, requested permission, AND enabled system status
+            val declaresAccessibilityService = pkg.services?.any { it.permission == "android.permission.BIND_ACCESSIBILITY_SERVICE" } == true
+            val requestsAccessibilityPerm = permissions.contains("android.permission.BIND_ACCESSIBILITY_SERVICE")
+            val isAccessibilityActive = enabledAccessibilityServices.contains(pkg.packageName)
+
+            if (isAccessibilityActive) {
+                riskScore += 45
+                dangerousPerms.add("android.permission.BIND_ACCESSIBILITY_SERVICE (ACTIVE)")
                 appRiskFindings.add(
                     Finding(
-                        title = "Accessibility Service Hook",
-                        description = "Declares accessibility binding capable of reading screen content and keystrokes.",
-                        severity = Severity.CRITICAL
+                        title = "Active Accessibility Service",
+                        description = "This application has an active, enabled Accessibility Service in Android system settings, granting real-time screen inspection, key event logging, and automated touch actions.",
+                        severity = Severity.CRITICAL,
+                        recommendation = "Disable this accessibility service in Settings unless strictly necessary."
+                    )
+                )
+            } else if (declaresAccessibilityService || requestsAccessibilityPerm) {
+                riskScore += 30
+                dangerousPerms.add("android.permission.BIND_ACCESSIBILITY_SERVICE (DECLARED)")
+                appRiskFindings.add(
+                    Finding(
+                        title = "Accessibility Service Hook Declared",
+                        description = "Declares an accessibility service (<service android:permission='android.permission.BIND_ACCESSIBILITY_SERVICE'>) capable of intercepting UI contents if activated by the user.",
+                        severity = Severity.CRITICAL,
+                        recommendation = "Ensure this app is not granted Accessibility permissions in Settings."
                     )
                 )
             }
@@ -183,7 +209,7 @@ object AppThreatAuditor {
                 isSideloaded = isSideloaded,
                 isDebuggable = isDebuggable,
                 isBootCompleted = isBootCompleted,
-                dangerousPermissions = dangerousPerms,
+                dangerousPermissions = dangerousPerms.distinct(),
                 riskFindings = appRiskFindings,
                 riskScore = riskScore
             )

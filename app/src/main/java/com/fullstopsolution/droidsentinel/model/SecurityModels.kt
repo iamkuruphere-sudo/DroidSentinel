@@ -72,6 +72,7 @@ data class NetworkAuditResult(
     val wifiSecurityType: String,
     val isVpnActive: Boolean,
     val isPrivateDnsActive: Boolean,
+    val privateDnsMode: String,
     val findings: List<Finding>
 )
 
