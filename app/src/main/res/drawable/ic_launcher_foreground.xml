@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Outer Sentinel Shield Geometry (Safe Zone: 24 to 84) -->
+    <!-- Shield Shadow / Ambient Glow -->
+    <path
+        android:fillColor="#0A3C52"
+        android:pathData="M54,23 L79,34 C79,59 69,76 54,85 C39,76 29,59 29,34 Z" />
+
+    <!-- Shield Outer Armor Plate (Deep Obsidian Teal) -->
+    <path
+        android:fillColor="#0E2338"
+        android:strokeColor="#00E5FF"
+        android:strokeWidth="2.2"
+        android:strokeLineJoin="round"
+        android:pathData="M54,25 L76,35 C76,57 67,73 54,82 C41,73 32,57 32,35 Z" />
+
+    <!-- Inner Shield Inset (High-contrast facet) -->
+    <path
+        android:fillColor="#13334C"
+        android:pathData="M54,30 L71,38 C71,55 64,68 54,75 C44,68 37,55 37,38 Z" />
+
+    <!-- Right-half Shield Shading for 3D Cyber Depth -->
+    <path
+        android:fillColor="#0B1C2A"
+        android:pathData="M54,30 L71,38 C71,55 64,68 54,75 Z" />
+
+    <!-- Central Cyber Security Core: Hexagonal Aegis Emblem -->
+    <!-- Top Arc / Circuit Links -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#00F5D4"
+        android:strokeWidth="1.5"
+        android:strokeLineCap="round"
+        android:pathData="M44,42 L54,36 L64,42" />
+
+    <!-- Center Cryptographic Lock / Sentinel Eye -->
+    <!-- Outer Node Ring -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#00E5FF"
+        android:strokeWidth="2"
+        android:pathData="M54,45 A7,7 0 1,0 54,59 A7,7 0 1,0 54,45 Z" />
+
+    <!-- Glowing Core Center -->
+    <path
+        android:fillColor="#00F5D4"
+        android:pathData="M54,48 A4,4 0 1,0 54,56 A4,4 0 1,0 54,48 Z" />
+
+    <!-- Vertical Data Beam / Armor Spine -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#00F5D4"
+        android:strokeWidth="2"
+        android:strokeLineCap="round"
+        android:pathData="M54,61 L54,71" />
+
+    <!-- Lateral Circuit Traces -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#00B4D8"
+        android:strokeWidth="1.2"
+        android:strokeLineCap="round"
+        android:pathData="M47,52 L40,52 M61,52 L68,52 M46,65 L40,68 M62,65 L68,68" />
+
+    <!-- Circuit Connection Dots -->
+    <path
+        android:fillColor="#00F5D4"
+        android:pathData="M39.5,52 A1.5,1.5 0 1,0 39.5,55 A1.5,1.5 0 1,0 39.5,52 Z" />
+    <path
+        android:fillColor="#00F5D4"
+        android:pathData="M68.5,52 A1.5,1.5 0 1,0 68.5,55 A1.5,1.5 0 1,0 68.5,52 Z" />
+    <path
+        android:fillColor="#00E5FF"
+        android:pathData="M54,71.5 A1.5,1.5 0 1,0 54,74.5 A1.5,1.5 0 1,0 54,71.5 Z" />
+
+</vector>

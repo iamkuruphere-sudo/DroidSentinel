@@ -1,0 +1,14 @@
+*.iml
+.gradle
+/local.properties
+/.idea/
+.DS_Store
+/build
+app/build/
+app/release/
+*.apk
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+s23guard-release.jks
