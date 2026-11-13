@@ -23,12 +23,13 @@ class InstallMonitorReceiver : BroadcastReceiver() {
         if (packageName == context.packageName) return
 
         val pm = context.packageManager
+        val flags = PackageManager.GET_PERMISSIONS or PackageManager.GET_SERVICES
         val pkgInfo = try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                pm.getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(PackageManager.GET_PERMISSIONS.toLong()))
+                pm.getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(flags.toLong()))
             } else {
                 @Suppress("DEPRECATION")
-                pm.getPackageInfo(packageName, PackageManager.GET_PERMISSIONS)
+                pm.getPackageInfo(packageName, flags)
             }
         } catch (_: Exception) {
             return
@@ -53,7 +54,12 @@ class InstallMonitorReceiver : BroadcastReceiver() {
         val isSideloaded = installer == null || (installer != "com.android.vending" && installer != "com.sec.android.app.samsungapps")
         val permissions = pkgInfo.requestedPermissions?.toSet() ?: emptySet()
         val hasOverlay = permissions.contains("android.permission.SYSTEM_ALERT_WINDOW")
-        val hasAccessibility = permissions.contains("android.permission.BIND_ACCESSIBILITY_SERVICE")
+        
+        // Inspect both declared <service> permissions and requested permissions for accessibility hooks
+        val declaresAccessibility = pkgInfo.services?.any { it.permission == "android.permission.BIND_ACCESSIBILITY_SERVICE" } == true
+        val requestsAccessibility = permissions.contains("android.permission.BIND_ACCESSIBILITY_SERVICE")
+        val hasAccessibility = declaresAccessibility || requestsAccessibility
+
         val hasSms = permissions.any { it.contains("SMS") }
 
         if (isSideloaded || hasOverlay || hasAccessibility || hasSms) {

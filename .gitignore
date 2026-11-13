@@ -7,8 +7,9 @@
 app/build/
 app/release/
 *.apk
+*.jks
+*.keystore
 /captures
 .externalNativeBuild
 .cxx
 local.properties
-s23guard-release.jks
