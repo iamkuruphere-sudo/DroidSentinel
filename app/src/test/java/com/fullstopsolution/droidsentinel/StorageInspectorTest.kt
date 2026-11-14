@@ -1,6 +1,10 @@
 package com.fullstopsolution.droidsentinel
 
+import com.fullstopsolution.droidsentinel.auditor.StorageInspector
+import com.fullstopsolution.droidsentinel.model.Severity
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -10,65 +14,26 @@ import java.util.zip.ZipOutputStream
 
 class StorageInspectorTest {
 
-    private fun isDeceptiveExtension(filename: String): Boolean {
-        val lower = filename.lowercase()
-        return lower.contains(".pdf.apk") ||
-                lower.contains(".doc.apk") ||
-                lower.contains(".jpg.apk") ||
-                lower.contains(".docx.apk") ||
-                lower.contains(".png.apk")
-    }
-
-    private fun isSuspiciousScript(filename: String): Boolean {
-        val scripts = setOf("autorun.inf", ".bat", ".cmd", ".vbs", ".ps1", ".vbe", ".jse", ".sh", ".dex")
-        val lower = filename.lowercase()
-        return scripts.any { lower == it || lower.endsWith(it) }
-    }
-
-    private fun containsVbaMacroInZip(file: File): Boolean {
-        return try {
-            java.util.zip.ZipFile(file).use { zip ->
-                val entries = zip.entries()
-                var entryCount = 0
-                while (entries.hasMoreElements() && entryCount < 1000) {
-                    val entry = entries.nextElement()
-                    entryCount++
-                    val name = entry.name.lowercase()
-                    if (name.endsWith("vbaproject.bin") ||
-                        name.endsWith("vbadata.xml") ||
-                        name.contains("word/vbaproject.bin") ||
-                        name.contains("xl/vbaproject.bin") ||
-                        name.contains("ppt/vbaproject.bin")
-                    ) {
-                        return true
-                    }
-                }
-            }
-            false
-        } catch (_: Exception) {
-            false
-        }
-    }
-
     @Test
     fun testDeceptiveDoubleExtensionDetection() {
-        assertTrue(isDeceptiveExtension("urgent_invoice.pdf.apk"))
-        assertTrue(isDeceptiveExtension("photo.jpg.apk"))
-        assertTrue(isDeceptiveExtension("contract.doc.apk"))
-        assertTrue(isDeceptiveExtension("statement.docx.apk"))
-        assertFalse(isDeceptiveExtension("legitimate_app.apk"))
-        assertFalse(isDeceptiveExtension("document.pdf"))
+        assertTrue(StorageInspector.isDeceptiveExtension("urgent_invoice.pdf.apk"))
+        assertTrue(StorageInspector.isDeceptiveExtension("photo.jpg.apk"))
+        assertTrue(StorageInspector.isDeceptiveExtension("contract.doc.apk"))
+        assertTrue(StorageInspector.isDeceptiveExtension("statement.docx.apk"))
+        assertTrue(StorageInspector.isDeceptiveExtension("budget.xlsx.apk"))
+        assertFalse(StorageInspector.isDeceptiveExtension("legitimate_app.apk"))
+        assertFalse(StorageInspector.isDeceptiveExtension("document.pdf"))
     }
 
     @Test
     fun testSuspiciousScriptDetection() {
-        assertTrue(isSuspiciousScript("autorun.inf"))
-        assertTrue(isSuspiciousScript("payload.vbs"))
-        assertTrue(isSuspiciousScript("setup.bat"))
-        assertTrue(isSuspiciousScript("install.ps1"))
-        assertTrue(isSuspiciousScript("dropper.dex"))
-        assertFalse(isSuspiciousScript("readme.txt"))
-        assertFalse(isSuspiciousScript("notes.md"))
+        assertTrue(StorageInspector.isSuspiciousScript("autorun.inf"))
+        assertTrue(StorageInspector.isSuspiciousScript("payload.vbs"))
+        assertTrue(StorageInspector.isSuspiciousScript("setup.bat"))
+        assertTrue(StorageInspector.isSuspiciousScript("install.ps1"))
+        assertTrue(StorageInspector.isSuspiciousScript("dropper.dex"))
+        assertFalse(StorageInspector.isSuspiciousScript("readme.txt"))
+        assertFalse(StorageInspector.isSuspiciousScript("notes.md"))
     }
 
     @Test
@@ -86,7 +51,7 @@ class StorageInspectorTest {
             zos.closeEntry()
         }
 
-        assertTrue("Should detect embedded VBA macro project in zip archive", containsVbaMacroInZip(tempZip))
+        assertTrue("Should detect embedded VBA macro project in zip archive", StorageInspector.containsVbaMacro(tempZip))
 
         // Create a clean zip without macro
         val cleanZip = File.createTempFile("clean_test_", ".xlsx")
@@ -98,6 +63,56 @@ class StorageInspectorTest {
             zos.closeEntry()
         }
 
-        assertFalse("Clean document must not trigger macro detection", containsVbaMacroInZip(cleanZip))
+        assertFalse("Clean document must not trigger macro detection", StorageInspector.containsVbaMacro(cleanZip))
+    }
+
+    @Test
+    fun testAuditDirectoryEndToEndWithActualFiles() {
+        val tempDir = File.createTempFile("droidsentinel_test_dir_", "").apply {
+            delete()
+            mkdirs()
+        }
+        tempDir.deleteOnExit()
+
+        try {
+            // 1. Clean file
+            val cleanFile = File(tempDir, "readme.txt")
+            cleanFile.writeText("Clean document")
+
+            // 2. Deceptive double extension
+            val deceptiveFile = File(tempDir, "invoice.pdf.apk")
+            deceptiveFile.writeBytes(byteArrayOf(0x50, 0x4B, 0x03, 0x04))
+
+            // 3. Suspicious script
+            val scriptFile = File(tempDir, "autorun.inf")
+            scriptFile.writeText("[autorun]\nopen=malware.exe")
+
+            // 4. Macro file
+            val macroFile = File(tempDir, "financials.xlsm")
+            ZipOutputStream(FileOutputStream(macroFile)).use { zos ->
+                zos.putNextEntry(ZipEntry("xl/vbaProject.bin"))
+                zos.write("VBA MACRO PAYLOAD".toByteArray())
+                zos.closeEntry()
+            }
+
+            val result = StorageInspector.auditDirectory(context = null, directory = tempDir)
+
+            assertEquals(4, result.filesScannedCount)
+            assertEquals(3, result.threatsFound.size)
+
+            val threatTypes = result.threatsFound.map { it.threatType }.toSet()
+            assertTrue(threatTypes.contains("DECEPTIVE_EXTENSION"))
+            assertTrue(threatTypes.contains("AUTORUN_SCRIPT"))
+            assertTrue(threatTypes.contains("EMBEDDED_VBA_MACRO"))
+
+            result.threatsFound.forEach { threat ->
+                assertNotNull("SHA-256 hash must be computed", threat.sha256Hash)
+                assertEquals(64, threat.sha256Hash!!.length)
+            }
+
+            assertTrue("Must contain a critical finding", result.findings.any { it.severity == Severity.CRITICAL })
+        } finally {
+            tempDir.deleteRecursively()
+        }
     }
 }

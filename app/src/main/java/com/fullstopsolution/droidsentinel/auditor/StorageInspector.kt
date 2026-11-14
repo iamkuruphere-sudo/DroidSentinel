@@ -17,15 +17,16 @@ import java.util.zip.ZipFile
 
 object StorageInspector {
 
-    private val SUSPICIOUS_SCRIPTS = setOf(
+    internal val SUSPICIOUS_SCRIPTS = setOf(
         "autorun.inf", ".bat", ".cmd", ".vbs", ".ps1", ".vbe", ".jse", ".sh", ".dex"
     )
-    private val OFFICE_EXTENSIONS = setOf(
+    internal val OFFICE_EXTENSIONS = setOf(
         ".docm", ".xlsm", ".pptm", ".docx", ".xlsx", ".pptx", ".dotm", ".xltm"
     )
 
     fun audit(
         context: Context,
+        isCancelled: (() -> Boolean)? = null,
         onProgress: ((scanned: Int, total: Int, currentFile: String) -> Unit)? = null
     ): StorageAuditResult {
         val hasAccess = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -34,12 +35,8 @@ object StorageInspector {
             true
         }
 
-        val threats = mutableListOf<StorageThreatInfo>()
-        val findings = mutableListOf<Finding>()
-        var count = 0
-
         if (!hasAccess) {
-            findings.add(
+            val findings = listOf(
                 Finding(
                     title = "Scoped Storage Active",
                     description = "Full filesystem access to /Download is restricted by the Android Linux sandbox.",
@@ -54,27 +51,35 @@ object StorageInspector {
         }
 
         val downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
-        if (downloadDir != null && downloadDir.exists() && downloadDir.isDirectory) {
-            val files = downloadDir.listFiles() ?: emptyArray()
+        return auditDirectory(context, downloadDir, isCancelled, onProgress)
+    }
+
+    fun auditDirectory(
+        context: Context?,
+        directory: File?,
+        isCancelled: (() -> Boolean)? = null,
+        onProgress: ((scanned: Int, total: Int, currentFile: String) -> Unit)? = null
+    ): StorageAuditResult {
+        val threats = mutableListOf<StorageThreatInfo>()
+        val findings = mutableListOf<Finding>()
+        var count = 0
+
+        if (directory != null && directory.exists() && directory.isDirectory) {
+            val files = directory.listFiles() ?: emptyArray()
             val totalFiles = files.size
             count = totalFiles
 
             var scannedIndex = 0
             for (file in files) {
+                if (isCancelled?.invoke() == true) break
+
                 scannedIndex++
                 onProgress?.invoke(scannedIndex, totalFiles, file.name)
 
                 if (!file.isFile) continue
 
-                val lower = file.name.lowercase()
-
                 // 1. Deceptive double extensions
-                if (lower.contains(".pdf.apk") ||
-                    lower.contains(".doc.apk") ||
-                    lower.contains(".jpg.apk") ||
-                    lower.contains(".docx.apk") ||
-                    lower.contains(".png.apk")
-                ) {
+                if (isDeceptiveExtension(file.name)) {
                     val hash = computeSha256(file)
                     threats.add(
                         StorageThreatInfo(
@@ -91,7 +96,7 @@ object StorageInspector {
                 }
 
                 // 2. Scripts / Autorun
-                if (SUSPICIOUS_SCRIPTS.any { lower == it || lower.endsWith(it) }) {
+                if (isSuspiciousScript(file.name)) {
                     val hash = computeSha256(file)
                     threats.add(
                         StorageThreatInfo(
@@ -108,7 +113,7 @@ object StorageInspector {
                 }
 
                 // 3. Office documents with embedded VBA macros
-                if (OFFICE_EXTENSIONS.any { lower.endsWith(it) }) {
+                if (isOfficeDocument(file.name)) {
                     if (containsVbaMacro(file)) {
                         val hash = computeSha256(file)
                         threats.add(
@@ -127,7 +132,7 @@ object StorageInspector {
                 }
 
                 // 4. Downloaded APK payload
-                if (lower.endsWith(".apk")) {
+                if (file.name.lowercase().endsWith(".apk") && context != null) {
                     val threat = inspectApkFile(context, file)
                     if (threat != null) {
                         threats.add(threat)
@@ -165,7 +170,27 @@ object StorageInspector {
         )
     }
 
-    private fun containsVbaMacro(file: File): Boolean {
+    internal fun isDeceptiveExtension(fileName: String): Boolean {
+        val lower = fileName.lowercase()
+        return lower.contains(".pdf.apk") ||
+                lower.contains(".doc.apk") ||
+                lower.contains(".jpg.apk") ||
+                lower.contains(".docx.apk") ||
+                lower.contains(".png.apk") ||
+                lower.contains(".xlsx.apk")
+    }
+
+    internal fun isSuspiciousScript(fileName: String): Boolean {
+        val lower = fileName.lowercase()
+        return SUSPICIOUS_SCRIPTS.any { lower == it || lower.endsWith(it) }
+    }
+
+    internal fun isOfficeDocument(fileName: String): Boolean {
+        val lower = fileName.lowercase()
+        return OFFICE_EXTENSIONS.any { lower.endsWith(it) }
+    }
+
+    internal fun containsVbaMacro(file: File): Boolean {
         return try {
             ZipFile(file).use { zip ->
                 val entries = zip.entries()
@@ -217,7 +242,7 @@ object StorageInspector {
         )
     }
 
-    private fun computeSha256(file: File): String {
+    internal fun computeSha256(file: File): String {
         return try {
             val digest = MessageDigest.getInstance("SHA-256")
             val buffer = ByteArray(8192)

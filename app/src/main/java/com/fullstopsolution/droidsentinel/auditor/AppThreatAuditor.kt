@@ -15,7 +15,7 @@ import com.fullstopsolution.droidsentinel.model.Severity
 
 object AppThreatAuditor {
 
-    private val TRUSTED_STORE_INSTALLERS = setOf(
+    val TRUSTED_STORE_INSTALLERS = setOf(
         "com.android.vending",               // Google Play
         "com.sec.android.app.samsungapps",   // Samsung Galaxy Store
         "com.amazon.venezia",               // Amazon Appstore
@@ -36,6 +36,7 @@ object AppThreatAuditor {
 
     fun audit(
         context: Context,
+        isCancelled: (() -> Boolean)? = null,
         onProgress: ((scanned: Int, total: Int, currentPkg: String) -> Unit)? = null
     ): AppAuditResult {
         val pm = context.packageManager
@@ -68,6 +69,8 @@ object AppThreatAuditor {
 
         var index = 0
         for (pkg in packages) {
+            if (isCancelled?.invoke() == true) break
+
             index++
             val appInfo = pkg.applicationInfo ?: continue
             val isSystem = (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0
@@ -93,8 +96,13 @@ object AppThreatAuditor {
             val permissions = pkg.requestedPermissions?.toList() ?: emptyList()
             val dangerousPerms = permissions.filter { isDangerousPermission(it) }
 
-            // Count unprotected exported components (IPC attack surface)
-            val exportedCount = countUnprotectedExportedComponents(pkg)
+            // Count unprotected exported components, excluding the primary user launcher activity
+            val launchActivityName = try {
+                pm.getLaunchIntentForPackage(pkg.packageName)?.component?.className
+            } catch (_: Exception) {
+                null
+            }
+            val exportedCount = countUnprotectedExportedComponents(pkg, launchActivityName)
 
             val appRiskFindings = mutableListOf<Finding>()
             var riskScore = 0
@@ -175,13 +183,13 @@ object AppThreatAuditor {
                 )
             }
 
-            // 5. Unprotected Exported IPC Components
+            // 5. Unprotected Exported IPC Components (excluding legitimate launcher activity)
             if (exportedCount > 0) {
                 riskScore += (exportedCount * 5).coerceAtMost(20)
                 appRiskFindings.add(
                     Finding(
                         title = "$exportedCount Unprotected Exported Component(s)",
-                        description = "App exposes $exportedCount activities, services, or receivers without required permissions.",
+                        description = "App exposes $exportedCount non-launcher activities, services, receivers, or providers without required permissions.",
                         severity = Severity.WARNING,
                         recommendation = "Third-party malware on the device can invoke these components directly.",
                         actionType = ActionType.OPEN_APP_SETTINGS,
@@ -193,7 +201,8 @@ object AppThreatAuditor {
             }
 
             // 6. Permission Clustering: Overlay / Tapjacking
-            if (permissions.contains("android.permission.SYSTEM_ALERT_WINDOW")) {
+            val hasOverlay = permissions.contains("android.permission.SYSTEM_ALERT_WINDOW")
+            if (hasOverlay) {
                 riskScore += 20
                 appRiskFindings.add(
                     Finding(
@@ -209,7 +218,8 @@ object AppThreatAuditor {
             }
 
             // 7. Permission Clustering: Accessibility Abuse
-            if (permissions.contains("android.permission.BIND_ACCESSIBILITY_SERVICE")) {
+            val hasAccessibility = permissions.contains("android.permission.BIND_ACCESSIBILITY_SERVICE")
+            if (hasAccessibility) {
                 riskScore += 30
                 appRiskFindings.add(
                     Finding(
@@ -224,7 +234,24 @@ object AppThreatAuditor {
                 )
             }
 
-            // 8. Permission Clustering: OTP / SMS + Internet
+            // 8. Malware Profile: Device Takeover Trojan (Overlay + Accessibility)
+            if (hasOverlay && hasAccessibility) {
+                riskScore += 40
+                appRiskFindings.add(
+                    Finding(
+                        title = "Device Takeover Trojan Cluster",
+                        description = "App combines Screen Overlay and Accessibility Hook (profile of banking trojans such as SharkBot/TeaBot).",
+                        severity = Severity.CRITICAL,
+                        recommendation = "Extremely high threat level. Review or uninstall immediately.",
+                        actionType = ActionType.UNINSTALL_APP,
+                        actionPayload = pkg.packageName,
+                        actionLabel = "Uninstall",
+                        category = FindingCategory.APPS
+                    )
+                )
+            }
+
+            // 9. Permission Clustering: OTP / SMS + Internet
             val hasSms = permissions.any { it.contains("SMS") }
             val hasInternet = permissions.contains("android.permission.INTERNET")
             if (hasSms && hasInternet) {
@@ -242,7 +269,7 @@ object AppThreatAuditor {
                 )
             }
 
-            // 9. Permission Clustering: Audio/Camera + Internet
+            // 10. Permission Clustering: Audio/Camera + Internet
             val hasAudio = permissions.contains("android.permission.RECORD_AUDIO")
             val hasCamera = permissions.contains("android.permission.CAMERA")
             if (hasAudio && hasInternet && isSideloaded) {
@@ -274,7 +301,43 @@ object AppThreatAuditor {
                 )
             }
 
-            // 10. Dropper: Request Install Packages
+            // 11. Stalkerware Profile: Background Location + Fine Location + Internet
+            val hasFineLocation = permissions.contains("android.permission.ACCESS_FINE_LOCATION")
+            val hasBackgroundLocation = permissions.contains("android.permission.ACCESS_BACKGROUND_LOCATION")
+            if (hasFineLocation && hasBackgroundLocation && hasInternet && isSideloaded) {
+                riskScore += 30
+                appRiskFindings.add(
+                    Finding(
+                        title = "Stalkerware / Tracking Vector",
+                        description = "Sideloaded app tracks precise user location continuously in background with outbound network access.",
+                        severity = Severity.WARNING,
+                        actionType = ActionType.OPEN_APP_SETTINGS,
+                        actionPayload = pkg.packageName,
+                        actionLabel = "Manage Location",
+                        category = FindingCategory.APPS
+                    )
+                )
+            }
+
+            // 12. Contact & Call Harvester Profile: Contacts + Call Log + Internet
+            val hasContacts = permissions.any { it.contains("CONTACTS") }
+            val hasCallLog = permissions.any { it.contains("CALL_LOG") }
+            if (hasContacts && hasCallLog && hasInternet) {
+                riskScore += 25
+                appRiskFindings.add(
+                    Finding(
+                        title = "Contacts & Call Harvester Profile",
+                        description = "App holds both contact list and telephone call history permissions with outbound network transmission.",
+                        severity = Severity.WARNING,
+                        actionType = ActionType.OPEN_APP_SETTINGS,
+                        actionPayload = pkg.packageName,
+                        actionLabel = "Inspect App",
+                        category = FindingCategory.APPS
+                    )
+                )
+            }
+
+            // 13. Dropper: Request Install Packages
             if (permissions.contains("android.permission.REQUEST_INSTALL_PACKAGES")) {
                 riskScore += 20
                 appRiskFindings.add(
@@ -290,7 +353,7 @@ object AppThreatAuditor {
                 )
             }
 
-            // 11. Low Target SDK
+            // 14. Low Target SDK
             if (appInfo.targetSdkVersion < 31) {
                 riskScore += 20
                 appRiskFindings.add(
@@ -316,7 +379,7 @@ object AppThreatAuditor {
                 )
             }
 
-            // 12. Boot Persistence
+            // 15. Boot Persistence
             if (isBootCompleted) {
                 riskScore += 10
             }
@@ -388,6 +451,7 @@ object AppThreatAuditor {
             highRiskApps = highRisk,
             autorunApps = autorun,
             cleartextApps = cleartext,
+            allApps = allThreatApps,
             findings = generalFindings
         )
     }
@@ -416,10 +480,12 @@ object AppThreatAuditor {
         return receivers.mapNotNull { it.activityInfo?.packageName }.toSet()
     }
 
-    private fun countUnprotectedExportedComponents(pkg: PackageInfo): Int {
+    internal fun countUnprotectedExportedComponents(pkg: PackageInfo, launchActivityName: String? = null): Int {
         var count = 0
         pkg.activities?.forEach {
-            if (it.exported && it.permission.isNullOrEmpty()) count++
+            // Exclude the legitimate user launcher activity
+            val isLauncher = launchActivityName != null && it.name == launchActivityName
+            if (!isLauncher && it.exported && it.permission.isNullOrEmpty()) count++
         }
         pkg.services?.forEach {
             if (it.exported && it.permission.isNullOrEmpty()) count++
@@ -433,7 +499,7 @@ object AppThreatAuditor {
         return count
     }
 
-    private fun isDangerousPermission(perm: String): Boolean {
+    internal fun isDangerousPermission(perm: String): Boolean {
         return perm.contains("SMS") ||
                 perm.contains("CONTACTS") ||
                 perm.contains("CAMERA") ||
@@ -444,6 +510,11 @@ object AppThreatAuditor {
                 perm.contains("BIND_ACCESSIBILITY_SERVICE") ||
                 perm.contains("REQUEST_INSTALL_PACKAGES") ||
                 perm.contains("READ_CALL_LOG") ||
-                perm.contains("QUERY_ALL_PACKAGES")
+                perm.contains("QUERY_ALL_PACKAGES") ||
+                perm.contains("READ_PHONE_STATE") ||
+                perm.contains("READ_PHONE_NUMBERS") ||
+                perm.contains("CALL_PHONE") ||
+                perm.contains("READ_CALENDAR") ||
+                perm.contains("WRITE_CALENDAR")
     }
 }

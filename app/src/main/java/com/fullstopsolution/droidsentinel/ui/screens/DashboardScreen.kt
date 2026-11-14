@@ -690,15 +690,20 @@ fun AnimatedSecurityGauge(
                 listOf(StatusCritical, StatusWarning)
             }
 
-            drawArc(
-                brush = Brush.sweepGradient(gradientColors),
-                startAngle = 140f,
-                sweepAngle = 260f * animatedProgress,
-                useCenter = false,
-                topLeft = topLeft,
-                size = arcSize,
-                style = Stroke(width = strokeWidth, cap = StrokeCap.Round)
-            )
+            if (animatedProgress > 0.005f) {
+                drawArc(
+                    brush = Brush.sweepGradient(
+                        colors = gradientColors,
+                        center = Offset(size.width / 2, size.height / 2)
+                    ),
+                    startAngle = 140f,
+                    sweepAngle = 260f * animatedProgress,
+                    useCenter = false,
+                    topLeft = topLeft,
+                    size = arcSize,
+                    style = Stroke(width = strokeWidth, cap = StrokeCap.Round)
+                )
+            }
         }
 
         // Center Content

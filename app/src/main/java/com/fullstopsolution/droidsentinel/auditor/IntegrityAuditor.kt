@@ -25,7 +25,7 @@ import javax.crypto.SecretKeyFactory
 
 object IntegrityAuditor {
 
-    private val KNOWN_SU_PATHS = arrayOf(
+    internal val KNOWN_SU_PATHS = arrayOf(
         "/sbin/su",
         "/system/bin/su",
         "/system/xbin/su",
@@ -35,17 +35,23 @@ object IntegrityAuditor {
         "/system/bin/failsafe/su",
         "/data/local/su",
         "/system/app/Superuser.apk",
+        "/system/app/SuperSU.apk",
         "/system/bin/.ext/.su",
+        "/system/bin/.su",
+        "/system/xbin/.su",
+        "/system/xbin/daemonsu",
         "/system/usr/we-need-root/su-backup",
         "/system/xbin/mu",
         "/vendor/bin/su",
         "/product/bin/su",
         "/data/adb/ksu",
         "/data/adb/ksud",
+        "/data/adb/ksu/bin",
         "/system/bin/ksud",
         "/data/adb/ap",
         "/data/adb/apd",
         "/data/adb/magisk",
+        "/data/adb/modules",
         "/sbin/.magisk",
         "/cache/magisk.log",
         "/data/adb/magisk.db",
@@ -54,18 +60,26 @@ object IntegrityAuditor {
         "/vendor/bin/busybox"
     )
 
-    private val ROOT_PACKAGES = arrayOf(
+    internal val ROOT_PACKAGES = arrayOf(
         "com.topjohnwu.magisk",
         "me.weishu.kernelsu",
         "io.github.a13e300.ksu",
         "me.bmax.apatch",
         "com.noshufou.android.su",
+        "com.noshufou.android.su.elite",
         "com.koushikdutta.superuser",
+        "com.thirdparty.superuser",
+        "com.yellowes.su",
         "eu.chainfire.supersu",
         "com.chelpus.lackypatch",
         "org.lsposed.manager",
         "de.robv.android.xposed.installer",
-        "io.github.lsposed"
+        "io.github.lsposed",
+        "com.amphoras.hidemyroot",
+        "com.formyhm.hideroot",
+        "com.saurik.substrate",
+        "com.devadvance.rootcloak",
+        "com.devadvance.rootcloakplus"
     )
 
     fun audit(context: Context): DeviceIntegrityResult {
@@ -73,33 +87,28 @@ object IntegrityAuditor {
         val generalFindings = mutableListOf<Finding>()
 
         // 1. Filesystem binary presence
-        for (path in KNOWN_SU_PATHS) {
-            try {
-                val f = File(path)
-                if (f.exists()) {
-                    rootFindings.add(
-                        Finding(
-                            title = "Root Binary Detected",
-                            description = "Privileged superuser execution binary identified at $path",
-                            severity = Severity.CRITICAL,
-                            recommendation = "Device firmware has been altered. Re-flash official stock firmware.",
-                            actionType = ActionType.OPEN_SECURITY_SETTINGS,
-                            actionLabel = "Open Security",
-                            category = FindingCategory.INTEGRITY
-                        )
-                    )
-                    break
-                }
-            } catch (_: Exception) {
-            }
+        val detectedBinary = checkBinaryPaths()
+        if (detectedBinary != null) {
+            rootFindings.add(
+                Finding(
+                    title = "Root Binary Detected",
+                    description = "Privileged superuser execution binary identified at $detectedBinary",
+                    severity = Severity.CRITICAL,
+                    recommendation = "Device firmware has been altered. Re-flash official stock firmware.",
+                    actionType = ActionType.OPEN_SECURITY_SETTINGS,
+                    actionLabel = "Open Security",
+                    category = FindingCategory.INTEGRITY
+                )
+            )
         }
 
-        // 2. Command execution test ('which su')
-        if (canExecuteSu()) {
+        // 2. Command execution test ('which su' & PATH su detection)
+        val suExecSignal = canExecuteSu()
+        if (suExecSignal != null) {
             rootFindings.add(
                 Finding(
                     title = "Superuser Shell Available",
-                    description = "'su' execution succeeded in local process environment.",
+                    description = suExecSignal,
                     severity = Severity.CRITICAL,
                     recommendation = "Device possesses unconfined superuser access.",
                     actionType = ActionType.OPEN_SECURITY_SETTINGS,
@@ -153,14 +162,16 @@ object IntegrityAuditor {
             )
         }
 
-        // 6. System Properties: ro.debuggable / ro.secure
+        // 6. System Properties: ro.debuggable / ro.secure / service.adb.root
         val isDebuggableProp = getSystemProperty("ro.debuggable") == "1"
         val isSecurePropZero = getSystemProperty("ro.secure") == "0"
-        if (isDebuggableProp || isSecurePropZero) {
+        val isAdbRootProp = getSystemProperty("service.adb.root") == "1"
+
+        if (isDebuggableProp || isSecurePropZero || isAdbRootProp) {
             rootFindings.add(
                 Finding(
                     title = "Insecure OS Build Configuration",
-                    description = "Dangerous build flags active: ro.debuggable=$isDebuggableProp, ro.secure=${if (isSecurePropZero) "0 (insecure)" else "1"}.",
+                    description = "Dangerous build flags active: ro.debuggable=$isDebuggableProp, ro.secure=${if (isSecurePropZero) "0 (insecure)" else "1"}, service.adb.root=$isAdbRootProp.",
                     severity = Severity.CRITICAL,
                     recommendation = "Production firmware must have ro.debuggable=0 and ro.secure=1.",
                     category = FindingCategory.INTEGRITY
@@ -379,20 +390,48 @@ object IntegrityAuditor {
         )
     }
 
-    private fun canExecuteSu(): Boolean {
-        return try {
-            val process = Runtime.getRuntime().exec(arrayOf("which", "su"))
-            BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
-                val line = reader.readLine()
-                process.destroy()
-                line != null && line.trim().isNotEmpty()
+    internal fun checkBinaryPaths(): String? {
+        for (path in KNOWN_SU_PATHS) {
+            try {
+                val f = File(path)
+                if (f.exists()) {
+                    return path
+                }
+            } catch (_: Exception) {
             }
-        } catch (_: Exception) {
-            false
         }
+        return null
     }
 
-    private fun checkSuspiciousMounts(): String? {
+    internal fun canExecuteSu(): String? {
+        // 1. Direct which su command
+        try {
+            val process = Runtime.getRuntime().exec(arrayOf("which", "su"))
+            val line = BufferedReader(InputStreamReader(process.inputStream)).use { it.readLine() }
+            process.destroy()
+            if (!line.isNullOrBlank()) {
+                return "'which su' resolved binary at ${line.trim()}"
+            }
+        } catch (_: Exception) {
+        }
+
+        // 2. Scan PATH environment directories
+        val pathEnv = System.getenv("PATH") ?: ""
+        for (dir in pathEnv.split(":")) {
+            if (dir.isBlank()) continue
+            try {
+                val suFile = File(dir, "su")
+                if (suFile.exists()) {
+                    return "Executable 'su' binary discovered in system PATH: ${suFile.absolutePath}"
+                }
+            } catch (_: Exception) {
+            }
+        }
+
+        return null
+    }
+
+    internal fun checkSuspiciousMounts(): String? {
         val mountPaths = listOf("/proc/self/mounts", "/proc/mounts")
         for (path in mountPaths) {
             try {
@@ -418,7 +457,7 @@ object IntegrityAuditor {
         return null
     }
 
-    private fun checkKernelVersionString(): String? {
+    internal fun checkKernelVersionString(): String? {
         try {
             val file = File("/proc/version")
             if (file.exists() && file.canRead()) {
@@ -435,13 +474,16 @@ object IntegrityAuditor {
         return null
     }
 
-    private fun isSystemPartitionWritable(): Boolean {
+    internal fun isSystemPartitionWritable(): Boolean {
         val testDirs = listOf("/system", "/vendor")
         for (dir in testDirs) {
             try {
                 val testFile = File(dir, "droidsentinel_rw_probe_${System.currentTimeMillis()}.tmp")
                 if (testFile.createNewFile()) {
-                    testFile.delete()
+                    try {
+                        testFile.delete()
+                    } catch (_: Exception) {
+                    }
                     return true
                 }
             } catch (_: Exception) {
@@ -450,7 +492,7 @@ object IntegrityAuditor {
         return false
     }
 
-    private fun isXposedFrameworkActive(): Boolean {
+    internal fun isXposedFrameworkActive(): Boolean {
         return try {
             Class.forName("de.robv.android.xposed.XposedBridge")
             true
@@ -461,15 +503,13 @@ object IntegrityAuditor {
         }
     }
 
-    private fun querySELinuxMode(): String {
+    internal fun querySELinuxMode(): String {
         // 1. Try getenforce command
         try {
             val process = Runtime.getRuntime().exec("/system/bin/getenforce")
-            BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
-                val line = reader.readLine()?.trim()
-                process.destroy()
-                if (!line.isNullOrEmpty()) return line
-            }
+            val line = BufferedReader(InputStreamReader(process.inputStream)).use { it.readLine()?.trim() }
+            process.destroy()
+            if (!line.isNullOrEmpty()) return line
         } catch (_: Exception) {
         }
 
@@ -489,11 +529,23 @@ object IntegrityAuditor {
         if (prop.equals("permissive", ignoreCase = true)) {
             return "Permissive"
         }
+        if (prop.equals("disabled", ignoreCase = true)) {
+            return "Disabled"
+        }
+
+        // 4. If /sys/fs/selinux does not exist at all, SELinux is disabled
+        try {
+            val selinuxDir = File("/sys/fs/selinux")
+            if (!selinuxDir.exists()) {
+                return "Disabled"
+            }
+        } catch (_: Exception) {
+        }
 
         return "Enforcing"
     }
 
-    private fun getSystemProperty(key: String): String {
+    internal fun getSystemProperty(key: String): String {
         return try {
             val spClass = Class.forName("android.os.SystemProperties")
             val getMethod: Method = spClass.getMethod("get", String::class.java, String::class.java)
@@ -501,11 +553,9 @@ object IntegrityAuditor {
         } catch (_: Exception) {
             try {
                 val process = Runtime.getRuntime().exec(arrayOf("getprop", key))
-                BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
-                    val line = reader.readLine()?.trim()
-                    process.destroy()
-                    line ?: ""
-                }
+                val line = BufferedReader(InputStreamReader(process.inputStream)).use { it.readLine()?.trim() }
+                process.destroy()
+                line ?: ""
             } catch (_: Exception) {
                 ""
             }
@@ -561,8 +611,9 @@ object IntegrityAuditor {
 
     private fun probeKeystoreHardwareBacked(): Boolean {
         val alias = "droidsentinel_hw_probe_${System.currentTimeMillis()}"
+        var keyStore: KeyStore? = null
         return try {
-            val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+            keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
 
             val keyGenerator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
             keyGenerator.init(
@@ -586,12 +637,14 @@ object IntegrityAuditor {
                 @Suppress("DEPRECATION")
                 keyInfo.isInsideSecureHardware
             }
-
-            // Cleanup
-            keyStore.deleteEntry(alias)
             isHw
         } catch (_: Exception) {
             false
+        } finally {
+            try {
+                keyStore?.deleteEntry(alias)
+            } catch (_: Exception) {
+            }
         }
     }
 }

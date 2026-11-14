@@ -2,7 +2,7 @@ package com.fullstopsolution.droidsentinel
 
 import com.fullstopsolution.droidsentinel.auditor.NetworkAuditor
 import com.fullstopsolution.droidsentinel.model.Severity
-import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -33,6 +33,32 @@ class NetworkAuditorTest {
         val findings = NetworkAuditor.analyzeUrl("https://bank.com@malicious-host.xyz/auth")
         assertTrue("Deceptive @ redirect must produce critical finding",
             findings.any { it.severity == Severity.CRITICAL && it.title.contains("@") })
+    }
+
+    @Test
+    fun testEmailInQueryParameterDoesNotTriggerDeceptiveAtRedirect() {
+        val findings = NetworkAuditor.analyzeUrl("https://accounts.google.com/signin?email=user@example.com")
+        assertFalse("Email in query string must not trigger deceptive @ redirect",
+            findings.any { it.title.contains("@") })
+    }
+
+    @Test
+    fun testLegitimateGoogleAndAppleDomainsNotFlaggedAsBrandImpersonation() {
+        val googleSupport = NetworkAuditor.analyzeUrl("https://support.google.com/mail")
+        assertFalse("support.google.com must NOT be flagged as brand impersonation",
+            googleSupport.any { it.title.contains("Brand Impersonation", ignoreCase = true) })
+
+        val googleUk = NetworkAuditor.analyzeUrl("https://google.co.uk/search")
+        assertFalse("google.co.uk must NOT be flagged as brand impersonation",
+            googleUk.any { it.title.contains("Brand Impersonation", ignoreCase = true) })
+
+        val appleAuth = NetworkAuditor.analyzeUrl("https://appleid.apple.com/sign-in")
+        assertFalse("appleid.apple.com must NOT be flagged as brand impersonation",
+            appleAuth.any { it.title.contains("Brand Impersonation", ignoreCase = true) })
+
+        val msLogin = NetworkAuditor.analyzeUrl("https://login.microsoftonline.com")
+        assertFalse("login.microsoftonline.com must NOT be flagged as brand impersonation",
+            msLogin.any { it.title.contains("Brand Impersonation", ignoreCase = true) })
     }
 
     @Test
@@ -90,5 +116,19 @@ class NetworkAuditorTest {
         val findings = NetworkAuditor.analyzeUrl("https://paypal.com.verify-billing.xyz/login")
         assertTrue("Brand spoofing subdomain must produce critical finding",
             findings.any { it.severity == Severity.CRITICAL && it.title.contains("Brand Impersonation", ignoreCase = true) })
+    }
+
+    @Test
+    fun testHyphenatedBrandPhishingProducesCriticalFinding() {
+        val findings = NetworkAuditor.analyzeUrl("https://paypal-verification.com/login")
+        assertTrue("Hyphenated brand spoofing must produce critical finding",
+            findings.any { it.severity == Severity.CRITICAL && it.title.contains("Brand Impersonation", ignoreCase = true) })
+    }
+
+    @Test
+    fun testDangerousSchemeProducesCriticalFinding() {
+        val findings = NetworkAuditor.analyzeUrl("javascript:alert(document.cookie)")
+        assertTrue("JavaScript URI must produce critical finding",
+            findings.any { it.severity == Severity.CRITICAL && it.title.contains("Dangerous Executable", ignoreCase = true) })
     }
 }

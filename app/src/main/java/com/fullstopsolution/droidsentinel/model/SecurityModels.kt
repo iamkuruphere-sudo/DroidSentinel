@@ -17,7 +17,8 @@ enum class ActionType {
     OPEN_APP_SETTINGS,
     UNINSTALL_APP,
     MANAGE_STORAGE,
-    OPEN_PLAY_PROTECT
+    OPEN_PLAY_PROTECT,
+    DELETE_FILE
 }
 
 enum class FindingCategory {
@@ -77,6 +78,7 @@ data class AppAuditResult(
     val highRiskApps: List<AppThreatInfo>,
     val autorunApps: List<AppThreatInfo>,
     val cleartextApps: List<AppThreatInfo> = emptyList(),
+    val allApps: List<AppThreatInfo> = emptyList(),
     val findings: List<Finding>
 )
 

@@ -11,6 +11,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import com.fullstopsolution.droidsentinel.MainActivity
+import com.fullstopsolution.droidsentinel.auditor.AppThreatAuditor
 
 class InstallMonitorReceiver : BroadcastReceiver() {
 
@@ -50,16 +51,7 @@ class InstallMonitorReceiver : BroadcastReceiver() {
             null
         }
 
-        val trustedStores = setOf(
-            "com.android.vending",
-            "com.sec.android.app.samsungapps",
-            "com.amazon.venezia",
-            "org.fdroid.fdroid",
-            "org.fdroid.fdroid.privileged",
-            "com.xiaomi.mipicks",
-            "com.huawei.appmarket"
-        )
-        val isSideloaded = installer == null || installer !in trustedStores
+        val isSideloaded = installer == null || installer !in AppThreatAuditor.TRUSTED_STORE_INSTALLERS
         val permissions = pkgInfo.requestedPermissions?.toSet() ?: emptySet()
         val hasOverlay = permissions.contains("android.permission.SYSTEM_ALERT_WINDOW")
         val hasAccessibility = permissions.contains("android.permission.BIND_ACCESSIBILITY_SERVICE")

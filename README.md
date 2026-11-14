@@ -41,7 +41,7 @@ DroidSentinel is the Android mobile companion to [MacSentinel](https://github.co
 | 📦 **Package ID** | `com.fullstopsolution.droidsentinel` |
 | 🎯 **Target SDK** | Android 17 (API 37) / Min SDK: Android 13 (API 33) |
 | 🔑 **Signing Fingerprint (SHA-256)** | `40:83:42:03:B8:15:A4:3E:70:78:2F:E1:6D:10:BC:DD:84:28:C3:C4:A8:7A:54:83:4D:42:97:B3:91:22:99:30` |
-| 🛡️ **APK Binary Checksum (SHA-256)** | `524fa92317be85a649302454f0c03a178f8669a8a183186106ceded6b387b98c` |
+| 🛡️ **APK Binary Checksum (SHA-256)** | `d101ab15219a48f51da2ee59318b3dd958508ff104b60d31f53b14f9fba89226` |
 | 📦 **GitHub Releases** | [DroidSentinel Releases](https://github.com/iamkuruphere-sudo/DroidSentinel/releases) |
 | 🍏 **macOS Companion** | [MacSentinel](https://github.com/iamkuruphere-sudo/MacSentinel) |
 | ✉️ **Official Support Desk** | [contact@fullstopsolution.in](mailto:contact@fullstopsolution.in) |

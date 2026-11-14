@@ -1,63 +1,29 @@
 package com.fullstopsolution.droidsentinel
 
+import com.fullstopsolution.droidsentinel.model.SecurityScorer
 import com.fullstopsolution.droidsentinel.model.Severity
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class SecurityScoreTest {
 
-    private fun calculateScore(
-        isRooted: Boolean = false,
-        selinuxMode: String = "Enforcing",
-        isAdbEnabled: Boolean = false,
-        isAdbWifiEnabled: Boolean = false,
-        isDeviceLocked: Boolean = true,
-        hasHardwareKeystore: Boolean = true,
-        highRiskAppsCount: Int = 0,
-        storageThreatsCount: Int = 0,
-        isVpnActive: Boolean = true,
-        isPrivateDnsActive: Boolean = true
-    ): Pair<Int, Severity> {
-        var score = 100
-        if (isRooted) score -= 40
-        if (selinuxMode != "Enforcing") score -= 25
-        if (isAdbEnabled) score -= 10
-        if (isAdbWifiEnabled) score -= 20
-        if (!isDeviceLocked) score -= 15
-        if (!hasHardwareKeystore) score -= 10
-
-        score -= (highRiskAppsCount * 15).coerceAtMost(30)
-        score -= (storageThreatsCount * 20).coerceAtMost(40)
-        if (!isVpnActive && !isPrivateDnsActive) score -= 10
-
-        score = score.coerceIn(0, 100)
-
-        val status = when {
-            score >= 80 -> Severity.SECURE
-            score >= 50 -> Severity.WARNING
-            else -> Severity.CRITICAL
-        }
-
-        return score to status
-    }
-
     @Test
     fun testPristineDeviceScores100Secure() {
-        val (score, status) = calculateScore()
+        val (score, status) = SecurityScorer.evaluateScore()
         assertEquals(100, score)
         assertEquals(Severity.SECURE, status)
     }
 
     @Test
     fun testRootedDeviceDocks40Points() {
-        val (score, status) = calculateScore(isRooted = true)
+        val (score, status) = SecurityScorer.evaluateScore(isRooted = true)
         assertEquals(60, score)
         assertEquals(Severity.WARNING, status)
     }
 
     @Test
     fun testSeverelyCompromisedDeviceClampsAtZeroCritical() {
-        val (score, status) = calculateScore(
+        val (score, status) = SecurityScorer.evaluateScore(
             isRooted = true,
             selinuxMode = "Permissive",
             isAdbEnabled = true,
@@ -76,35 +42,25 @@ class SecurityScoreTest {
     @Test
     fun testScoreBoundaries() {
         // Exactly 80 should be SECURE
-        val status80 = when {
-            80 >= 80 -> Severity.SECURE
-            80 >= 50 -> Severity.WARNING
-            else -> Severity.CRITICAL
-        }
+        val (_, status80) = SecurityScorer.evaluateScore(isAdbWifiEnabled = true) // 100 - 20 = 80
         assertEquals(Severity.SECURE, status80)
 
-        // Exactly 79 should be WARNING
-        val status79 = when {
-            79 >= 80 -> Severity.SECURE
-            79 >= 50 -> Severity.WARNING
-            else -> Severity.CRITICAL
-        }
-        assertEquals(Severity.WARNING, status79)
+        // Exactly 75 should be WARNING
+        val (_, status75) = SecurityScorer.evaluateScore(selinuxMode = "Permissive") // 100 - 25 = 75
+        assertEquals(Severity.WARNING, status75)
 
         // Exactly 50 should be WARNING
-        val status50 = when {
-            50 >= 80 -> Severity.SECURE
-            50 >= 50 -> Severity.WARNING
-            else -> Severity.CRITICAL
-        }
+        val (_, status50) = SecurityScorer.evaluateScore(
+            isRooted = true,
+            isAdbEnabled = true
+        ) // 100 - 40 - 10 = 50
         assertEquals(Severity.WARNING, status50)
 
-        // 49 should be CRITICAL
-        val status49 = when {
-            49 >= 80 -> Severity.SECURE
-            49 >= 50 -> Severity.WARNING
-            else -> Severity.CRITICAL
-        }
-        assertEquals(Severity.CRITICAL, status49)
+        // 49 or below should be CRITICAL
+        val (_, statusCritical) = SecurityScorer.evaluateScore(
+            isRooted = true,
+            isAdbWifiEnabled = true
+        ) // 100 - 40 - 20 = 40
+        assertEquals(Severity.CRITICAL, statusCritical)
     }
 }

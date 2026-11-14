@@ -227,7 +227,7 @@ fun AppsTab(
                 "SIDELOAD" -> appAudit.sideloadedApps
                 "CLEARTEXT" -> appAudit.cleartextApps
                 "AUTORUN" -> appAudit.autorunApps
-                else -> appAudit.sideloadedApps + appAudit.highRiskApps + appAudit.cleartextApps
+                else -> appAudit.allApps.ifEmpty { appAudit.sideloadedApps + appAudit.highRiskApps + appAudit.cleartextApps }
             }.distinctBy { it.packageName }
 
             val filteredList = baseList.filter { app ->
@@ -256,7 +256,8 @@ fun AppsTab(
 @Composable
 fun StorageTab(
     assessment: CompleteSecurityAssessment?,
-    onRequestStoragePermission: () -> Unit
+    onRequestStoragePermission: () -> Unit,
+    onExecuteAction: (Finding) -> Unit = {}
 ) {
     LazyColumn(
         modifier = Modifier
@@ -376,6 +377,33 @@ fun StorageTab(
                                     Text("SHA-256: ${threat.sha256Hash}", color = CyanAccent, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
                                 }
                                 Text("Path: ${threat.filePath}", color = TextMuted, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.End
+                                ) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            onExecuteAction(
+                                                Finding(
+                                                    title = "Delete File: ${threat.fileName}",
+                                                    description = threat.details,
+                                                    severity = Severity.CRITICAL,
+                                                    actionType = ActionType.DELETE_FILE,
+                                                    actionPayload = threat.filePath,
+                                                    actionLabel = "Delete File"
+                                                )
+                                            )
+                                        },
+                                        shape = RoundedCornerShape(6.dp),
+                                        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                                        colors = ButtonDefaults.outlinedButtonColors(contentColor = StatusCritical)
+                                    ) {
+                                        Icon(Icons.Default.Delete, contentDescription = "Delete", modifier = Modifier.size(12.dp))
+                                        Spacer(modifier = Modifier.width(4.dp))
+                                        Text("Delete Threat", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                                    }
+                                }
                             }
                         }
                     }

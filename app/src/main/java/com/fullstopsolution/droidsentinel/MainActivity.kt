@@ -54,7 +54,9 @@ import com.fullstopsolution.droidsentinel.model.CompleteSecurityAssessment
 import com.fullstopsolution.droidsentinel.model.Finding
 import com.fullstopsolution.droidsentinel.model.ScanProgress
 import com.fullstopsolution.droidsentinel.model.ScanStage
+import com.fullstopsolution.droidsentinel.model.SecurityScorer
 import com.fullstopsolution.droidsentinel.model.Severity
+import com.fullstopsolution.droidsentinel.model.StorageThreatInfo
 import com.fullstopsolution.droidsentinel.ui.screens.AppsTab
 import com.fullstopsolution.droidsentinel.ui.screens.DashboardScreen
 import com.fullstopsolution.droidsentinel.ui.screens.IntegrityTab
@@ -144,7 +146,10 @@ class MainActivity : ComponentActivity() {
                 // Stage 2: Application Audit (25% - 65%)
                 updateProgress(ScanStage.APPLICATION_AUDIT, 30, "Discovering installed applications...")
                 checkPause()
-                val appAudit = AppThreatAuditor.audit(this@MainActivity) { scanned, total, pkgName ->
+                val appAudit = AppThreatAuditor.audit(
+                    context = this@MainActivity,
+                    isCancelled = { !isActive }
+                ) { scanned, total, pkgName ->
                     if (total > 0) {
                         val pct = 30 + ((scanned.toFloat() / total.toFloat()) * 35).toInt()
                         updateProgress(
@@ -159,7 +164,10 @@ class MainActivity : ComponentActivity() {
                 // Stage 3: Storage & Macro Inspection (65% - 85%)
                 updateProgress(ScanStage.STORAGE_INSPECTION, 68, "Inspecting storage directory /Download...")
                 checkPause()
-                val storageAudit = StorageInspector.audit(this@MainActivity) { scanned, total, fileName ->
+                val storageAudit = StorageInspector.audit(
+                    context = this@MainActivity,
+                    isCancelled = { !isActive }
+                ) { scanned, total, fileName ->
                     if (total > 0) {
                         val pct = 68 + ((scanned.toFloat() / total.toFloat()) * 17).toInt()
                         updateProgress(
@@ -187,26 +195,13 @@ class MainActivity : ComponentActivity() {
                 allFindings.addAll(storageAudit.findings)
                 allFindings.addAll(networkAudit.findings)
 
-                // Calculate overall score (0-100)
-                var score = 100
-                if (integrity.isRooted) score -= 40
-                if (integrity.selinuxMode != "Enforcing") score -= 25
-                if (integrity.isAdbEnabled) score -= 10
-                if (integrity.isAdbWifiEnabled) score -= 20
-                if (!integrity.isDeviceLocked) score -= 15
-                if (!integrity.hasHardwareKeystore) score -= 10
-
-                score -= (appAudit.highRiskApps.size * 15).coerceAtMost(30)
-                score -= (storageAudit.threatsFound.size * 20).coerceAtMost(40)
-                if (!networkAudit.isVpnActive && !networkAudit.isPrivateDnsActive) score -= 10
-
-                score = score.coerceIn(0, 100)
-
-                val status = when {
-                    score >= 80 -> Severity.SECURE
-                    score >= 50 -> Severity.WARNING
-                    else -> Severity.CRITICAL
-                }
+                // Calculate overall score (0-100) via unified SecurityScorer
+                val (score, status) = SecurityScorer.calculateScore(
+                    integrity = integrity,
+                    appAudit = appAudit,
+                    storageAudit = storageAudit,
+                    networkAudit = networkAudit
+                )
 
                 val isoFormat = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
                 val currentAssessment = CompleteSecurityAssessment(
@@ -327,6 +322,20 @@ class MainActivity : ComponentActivity() {
                         startActivity(intent)
                     } catch (_: Exception) {
                         startActivity(Intent(Settings.ACTION_SECURITY_SETTINGS))
+                    }
+                }
+                ActionType.DELETE_FILE -> {
+                    val path = finding.actionPayload ?: return
+                    try {
+                        val file = java.io.File(path)
+                        if (file.exists() && file.delete()) {
+                            Toast.makeText(this, "Threat payload deleted: ${file.name}", Toast.LENGTH_SHORT).show()
+                            runSecurityAudit()
+                        } else {
+                            Toast.makeText(this, "Could not delete file directly: ${file.name}", Toast.LENGTH_SHORT).show()
+                        }
+                    } catch (e: Exception) {
+                        Toast.makeText(this, "Delete failed: ${e.message}", Toast.LENGTH_SHORT).show()
                     }
                 }
                 ActionType.NONE -> {
@@ -474,7 +483,8 @@ fun MainScreen(
                 )
                 3 -> StorageTab(
                     assessment = assessment,
-                    onRequestStoragePermission = onRequestStoragePermission
+                    onRequestStoragePermission = onRequestStoragePermission,
+                    onExecuteAction = onExecuteAction
                 )
                 4 -> NetworkTab(
                     assessment = assessment,

@@ -37,6 +37,12 @@ object NetworkAuditor {
         '\u0456' to 'i'  // Cyrillic small letter byelorussian-ukrainian i
     )
 
+    private val HIGH_TARGET_BRANDS = listOf(
+        "paypal", "apple", "google", "microsoft", "amazon",
+        "netflix", "facebook", "instagram", "whatsapp",
+        "chase", "wellsfargo", "bankofamerica", "binance", "coinbase"
+    )
+
     fun audit(context: Context): NetworkAuditResult {
         val cm = context.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
         val activeNetwork = cm?.activeNetwork
@@ -132,9 +138,8 @@ object NetworkAuditor {
             )
         }
 
-        // 4. Wi-Fi Security Check (using modern transportInfo to avoid deprecation)
+        // 4. Wi-Fi Security Check
         if (isWifi) {
-            val wifiInfo = caps?.transportInfo as? WifiInfo
             val isMetered = !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)
             findings.add(
                 Finding(
@@ -166,6 +171,20 @@ object NetworkAuditor {
 
         if (trimmed.isEmpty()) return findings
 
+        // 0. Dangerous Executable Schemes
+        if (trimmed.startsWith("javascript:", ignoreCase = true) || trimmed.startsWith("data:", ignoreCase = true)) {
+            findings.add(
+                Finding(
+                    title = "Dangerous Executable URI Scheme",
+                    description = "URI uses an inline script or payload scheme (${trimmed.substringBefore(":")}) capable of client-side execution.",
+                    severity = Severity.CRITICAL,
+                    recommendation = "Never execute embedded script or data URIs from untrusted sources.",
+                    category = FindingCategory.NETWORK
+                )
+            )
+            return findings
+        }
+
         // 1. Cleartext HTTP Check
         if (trimmed.startsWith("http://", ignoreCase = true)) {
             findings.add(
@@ -179,12 +198,16 @@ object NetworkAuditor {
             )
         }
 
-        // 2. Deceptive '@' sign redirect syntax
-        if (trimmed.contains("@")) {
+        // 2. Deceptive '@' sign redirect syntax inside host authority
+        // Extract authority strictly before path/query/fragment to avoid false positives on email query params
+        val withoutScheme = trimmed.substringAfter("://", trimmed)
+        val authority = withoutScheme.substringBefore("/").substringBefore("?").substringBefore("#")
+
+        if (authority.contains("@")) {
             findings.add(
                 Finding(
                     title = "Deceptive '@' Authority Redirect Syntax",
-                    description = "URI contains an '@' character, frequently weaponized in phishing to mask the real destination host.",
+                    description = "URI contains an '@' character within the host authority ($authority), frequently weaponized in phishing to mask the real destination host.",
                     severity = Severity.CRITICAL,
                     recommendation = "Reject link. Web browsers discard all text prior to the '@' character and route to the suffix host.",
                     category = FindingCategory.NETWORK
@@ -198,7 +221,11 @@ object NetworkAuditor {
             null
         }
 
-        val rawHost = parsed?.host ?: extractHostFallback(trimmed)
+        val rawHost = if (authority.contains("@")) {
+            authority.substringAfterLast("@").substringBefore(":")
+        } else {
+            parsed?.host ?: extractHostFallback(trimmed)
+        }
         val host = rawHost.lowercase()
         val port = parsed?.port ?: -1
 
@@ -297,16 +324,15 @@ object NetworkAuditor {
             )
         }
 
-        // 10. Brand Impersonation Subdomain Pattern (e.g. paypal.com.evil.xyz or support.apple.com.login.link)
-        val brands = listOf("paypal", "apple", "google", "samsung", "netflix", "bank", "login", "verify", "chase", "wellsfargo", "binance", "coinbase", "support")
-        for (brand in brands) {
-            if (host.contains("$brand.") && !host.endsWith("$brand.com") && !host.endsWith("$brand.net")) {
+        // 10. Brand Impersonation Subdomain & Hyphenated Heuristic
+        for (brand in HIGH_TARGET_BRANDS) {
+            if (isBrandImpersonation(host, brand)) {
                 findings.add(
                     Finding(
                         title = "Brand Impersonation Subdomain Heuristic",
-                        description = "Hostname mimics '$brand' in subdomain prefix while hosted on an external root domain ($host).",
+                        description = "Hostname mimics '$brand' in subdomain prefix or deceptive compound while hosted on an external root domain ($host).",
                         severity = Severity.CRITICAL,
-                        recommendation = "Deceptive phishing domain masquerading as a reputable institution.",
+                        recommendation = "Deceptive phishing domain masquerading as a reputable institution ($brand).",
                         category = FindingCategory.NETWORK
                     )
                 )
@@ -326,6 +352,35 @@ object NetworkAuditor {
         }
 
         return findings
+    }
+
+    internal fun isBrandImpersonation(host: String, brand: String): Boolean {
+        // If this host IS the official brand domain or a legitimate subdomain of the brand
+        if (isOfficialBrandDomain(host, brand)) {
+            return false
+        }
+
+        // Phishing vectors:
+        // 1. brand appears as subdomain prefix: e.g. paypal.com.attacker.xyz, paypal.attacker.com
+        // 2. brand appears in hyphenated compound: e.g. paypal-verify.com, appleid-login.xyz
+        val containsSubdomainBrand = host.startsWith("$brand.") || host.contains(".$brand.") || host.contains("$brand.com.")
+        val containsHyphenatedBrand = host.startsWith("$brand-") || host.contains(".$brand-") || host.contains("-$brand.") || host.contains("-$brand-")
+
+        return containsSubdomainBrand || containsHyphenatedBrand
+    }
+
+    private fun isOfficialBrandDomain(host: String, brand: String): Boolean {
+        val validApexSuffixes = listOf(
+            "$brand.com", "$brand.net", "$brand.org", "$brand.me",
+            "$brand.co.uk", "$brand.ca", "$brand.de", "$brand.fr",
+            "$brand.in", "$brand.com.au", "$brand.co.in", "$brand.co.jp"
+        )
+        for (suffix in validApexSuffixes) {
+            if (host == suffix || host.endsWith(".$suffix")) {
+                return true
+            }
+        }
+        return false
     }
 
     private fun extractHostFallback(url: String): String {
