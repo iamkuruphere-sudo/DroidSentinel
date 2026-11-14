@@ -37,6 +37,8 @@ import androidx.compose.ui.unit.sp
 import com.fullstopsolution.droidsentinel.model.CompleteSecurityAssessment
 import com.fullstopsolution.droidsentinel.model.Finding
 import com.fullstopsolution.droidsentinel.model.Severity
+import com.fullstopsolution.droidsentinel.snapshot.AuditSnapshot
+import com.fullstopsolution.droidsentinel.snapshot.compareSnapshots
 import com.fullstopsolution.droidsentinel.ui.theme.CyanAccent
 import com.fullstopsolution.droidsentinel.ui.theme.CyberBorder
 import com.fullstopsolution.droidsentinel.ui.theme.CyberCard
@@ -50,13 +52,22 @@ import com.fullstopsolution.droidsentinel.ui.theme.StatusWarning
 import com.fullstopsolution.droidsentinel.ui.theme.TextMuted
 import com.fullstopsolution.droidsentinel.ui.theme.TextPrimary
 import com.fullstopsolution.droidsentinel.ui.theme.TextSecondary
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 @Composable
 fun DashboardScreen(
     assessment: CompleteSecurityAssessment?,
     isScanning: Boolean,
+    snapshots: List<AuditSnapshot>,
+    isSavingSnapshot: Boolean,
+    isExportingPdf: Boolean,
+    snapshotMessage: String?,
     onRunScan: () -> Unit,
     onExportEvidence: () -> Unit,
+    onExportPdf: () -> Unit,
+    onSaveSnapshot: () -> Unit,
     onNavigateTab: (Int) -> Unit
 ) {
     LazyColumn(
@@ -106,8 +117,20 @@ fun DashboardScreen(
             SecurityScoreCard(
                 assessment = assessment,
                 isScanning = isScanning,
+                isExportingPdf = isExportingPdf,
                 onRunScan = onRunScan,
-                onExportEvidence = onExportEvidence
+                onExportEvidence = onExportEvidence,
+                onExportPdf = onExportPdf
+            )
+        }
+
+        item {
+            SnapshotPanel(
+                assessment = assessment,
+                snapshots = snapshots,
+                isSaving = isSavingSnapshot,
+                message = snapshotMessage,
+                onSaveSnapshot = onSaveSnapshot
             )
         }
 
@@ -200,8 +223,10 @@ fun DashboardScreen(
 fun SecurityScoreCard(
     assessment: CompleteSecurityAssessment?,
     isScanning: Boolean,
+    isExportingPdf: Boolean,
     onRunScan: () -> Unit,
-    onExportEvidence: () -> Unit
+    onExportEvidence: () -> Unit,
+    onExportPdf: () -> Unit
 ) {
     val score = assessment?.overallScore ?: 0
     val scoreColor = when {
@@ -315,9 +340,150 @@ fun SecurityScoreCard(
                         )
                     ) {
                         Text(
-                            text = "Export Evidence",
+                            text = "Export JSON",
                             fontWeight = FontWeight.SemiBold,
                             fontSize = 13.sp
+                        )
+                    }
+                }
+            }
+
+            if (assessment != null) {
+                OutlinedButton(
+                    onClick = onExportPdf,
+                    enabled = !isExportingPdf,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(10.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MintEmerald)
+                ) {
+                    Text(
+                        if (isExportingPdf) "Preparing PDF..." else "Share PDF report",
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SnapshotPanel(
+    assessment: CompleteSecurityAssessment?,
+    snapshots: List<AuditSnapshot>,
+    isSaving: Boolean,
+    message: String?,
+    onSaveSnapshot: () -> Unit
+) {
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .border(1.dp, CyberBorder, RoundedCornerShape(12.dp)),
+        color = CyberCard
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text("Security snapshots", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Text(
+                "Save audit baselines on this device and compare changes across scans. The latest 20 snapshots are kept locally (${snapshots.size} saved).",
+                color = TextSecondary,
+                fontSize = 12.sp,
+                lineHeight = 17.sp
+            )
+            OutlinedButton(
+                onClick = onSaveSnapshot,
+                enabled = assessment != null && !isSaving,
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(10.dp),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = CyanAccent)
+            ) {
+                Text(
+                    if (isSaving) "Saving snapshot..." else "Save current snapshot",
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+            if (message != null) {
+                Text(message, color = if (message.startsWith("Unable")) StatusWarning else MintEmerald, fontSize = 12.sp)
+            }
+
+            when {
+                snapshots.isEmpty() -> Text(
+                    "No snapshots yet. Save this audit as a baseline; save another after a later audit to see what changed.",
+                    color = TextMuted,
+                    fontSize = 12.sp,
+                    lineHeight = 17.sp
+                )
+                snapshots.size == 1 -> {
+                    Text(
+                        "Baseline saved ${formatSnapshotTime(snapshots.first())}. Run another audit and save its snapshot to compare posture.",
+                        color = TextSecondary,
+                        fontSize = 12.sp,
+                        lineHeight = 17.sp
+                    )
+                }
+                else -> {
+                    val newer = snapshots[0]
+                    val older = snapshots[1]
+                    val diff = compareSnapshots(older, newer)
+                    Text(
+                        "Latest comparison",
+                        color = CyanAccent,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp
+                    )
+                    Text(
+                        "${formatSnapshotTime(older)} → ${formatSnapshotTime(newer)}",
+                        color = TextMuted,
+                        fontSize = 11.sp
+                    )
+                    val scoreLabel = when {
+                        diff.scoreChange > 0 -> "+${diff.scoreChange} points"
+                        else -> "${diff.scoreChange} points"
+                    }
+                    Text(
+                        "Score $scoreLabel • ${diff.metricChanges.size} posture changes • ${diff.addedFindings.size} new • ${diff.resolvedFindings.size} resolved",
+                        color = when {
+                            diff.scoreChange > 0 -> StatusSecure
+                            diff.scoreChange < 0 -> StatusCritical
+                            else -> TextPrimary
+                        },
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    diff.metricChanges.take(4).forEach { change ->
+                        Text(
+                            "${change.label}: ${change.previousValue} -> ${change.currentValue}",
+                            color = TextSecondary,
+                            fontSize = 12.sp
+                        )
+                    }
+                    if (diff.statusChanged) {
+                        Text(
+                            "Status: ${older.overallStatus} → ${newer.overallStatus}",
+                            color = StatusWarning,
+                            fontSize = 12.sp
+                        )
+                    }
+                    diff.addedFindings.take(3).forEach { finding ->
+                        val findingColor = when (finding.severity) {
+                            Severity.CRITICAL -> StatusCritical
+                            Severity.WARNING -> StatusWarning
+                            Severity.INFO -> StatusInfo
+                            Severity.SECURE -> StatusSecure
+                        }
+                        Text("+ ${finding.title}", color = findingColor, fontSize = 12.sp)
+                    }
+                    diff.resolvedFindings.take(3).forEach { finding ->
+                        Text("- ${finding.title}", color = StatusSecure, fontSize = 12.sp)
+                    }
+                    if (diff.metricChanges.size > 4 || diff.addedFindings.size > 3 || diff.resolvedFindings.size > 3) {
+                        Text(
+                            "Showing up to four posture changes and three findings in each group.",
+                            color = TextMuted,
+                            fontSize = 11.sp
                         )
                     }
                 }
@@ -325,6 +491,10 @@ fun SecurityScoreCard(
         }
     }
 }
+
+private fun formatSnapshotTime(snapshot: AuditSnapshot): String =
+    SimpleDateFormat("MMM d, yyyy HH:mm", Locale.getDefault())
+        .format(Date(snapshot.timestamp))
 
 @Composable
 fun CategoryCard(

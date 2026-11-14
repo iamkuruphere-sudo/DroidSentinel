@@ -20,7 +20,7 @@ object EvidenceExporter {
         val meta = JSONObject().apply {
             put("suite", "Fullstop Solution Mobile Precision Security Suite")
             put("tool", "DroidSentinel Endpoint Security")
-            put("version", "1.0.0")
+            put("version", "2.0.0")
             put("vendor", "Fullstop Solution (www.fullstopsolution.in)")
             put("timestamp", assessment.timestampIso)
             put("device_model", assessment.deviceModel)

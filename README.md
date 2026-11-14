@@ -63,8 +63,11 @@ DroidSentinel is the Android mobile companion to [MacSentinel](https://github.co
 ### 5. Real-Time Sideload Monitoring
 * Background `InstallMonitorReceiver` dynamically alerts the user when a newly installed application holds privileged overlay or accessibility permissions or arrives from an unverified sideload origin.
 
-### 6. Standardized JSON Evidence Export
+### 6. Reports, Snapshots & JSON Evidence
 * Exports a complete point-in-time security audit report adhering to Fullstop Solution evidence standards, allowing developers and security auditors to export findings via the Android Sharesheet or ingest into SIEM / compliance pipelines.
+* Generates a paginated PDF report with device posture, audit summaries, high-risk applications, storage threats, and consolidated findings.
+* Saves up to 20 audit snapshots in private device storage and compares the two newest snapshots by score, status, and added or resolved findings.
+* Snapshot data stays on the device and is not included in reports unless the user explicitly shares a report.
 
 ---
 
@@ -78,10 +81,12 @@ com.fullstopsolution.droidsentinel/
 │   ├── AppThreatAuditor.kt             # Package inventory, sideload & permission clusters
 │   ├── StorageInspector.kt             # Scoped storage, VBA macro & script inspection
 │   └── NetworkAuditor.kt               # VPN, Private DNS & link phishing heuristic engine
+├── snapshot/                           # Private on-device audit history and snapshot diffs
 ├── receiver/
 │   └── InstallMonitorReceiver.kt       # Real-time package installation security broadcast
 ├── export/
-│   └── EvidenceExporter.kt             # Fullstop Solution standard JSON evidence generation
+│   ├── EvidenceExporter.kt             # Fullstop Solution standard JSON evidence generation
+│   └── PdfReportExporter.kt            # Paginated PDF report generation and sharing
 ├── model/
 │   └── SecurityModels.kt               # Structured findings, severity & assessment schema
 └── ui/
@@ -111,6 +116,8 @@ cd DroidSentinel
 # Build and sign a release APK (configure protected signing inputs first)
 ./gradlew assembleRelease
 ```
+
+The app source targets the next major release, version **2.0.0**. This version has not been published as an APK.
 
 Release signing is read from the protected build environment variables `RELEASE_STORE_FILE`, `RELEASE_STORE_PASSWORD`, `RELEASE_KEY_ALIAS`, and `RELEASE_KEY_PASSWORD`. Supply all four only through a secret manager or another protected local/CI environment; never commit the keystore or credentials. Release builds fail with an actionable error if the signing configuration or keystore file is missing. Debug builds use the standard Android debug key.
 
