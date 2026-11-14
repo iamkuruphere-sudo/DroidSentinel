@@ -34,7 +34,7 @@ object AppThreatAuditor {
         // Discover boot-completed receivers
         val bootPackages = queryBootReceivers(pm)
 
-        val flags = PackageManager.GET_PERMISSIONS or PackageManager.GET_META_DATA
+        val flags = PackageManager.GET_PERMISSIONS or PackageManager.GET_META_DATA or PackageManager.GET_SERVICES
         val packages: List<PackageInfo> = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             pm.getInstalledPackages(PackageManager.PackageInfoFlags.of(flags.toLong()))
         } else {
@@ -120,7 +120,7 @@ object AppThreatAuditor {
             }
 
             // 5. Permission Clustering: Accessibility Abuse
-            if (permissions.contains("android.permission.BIND_ACCESSIBILITY_SERVICE")) {
+            if (AccessibilityServiceDetector.declaresAccessibilityBinding(pkg.services?.map { it.permission })) {
                 riskScore += 30
                 appRiskFindings.add(
                     Finding(

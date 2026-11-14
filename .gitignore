@@ -11,4 +11,5 @@ app/release/
 .externalNativeBuild
 .cxx
 local.properties
-s23guard-release.jks
+*.jks
+*.keystore

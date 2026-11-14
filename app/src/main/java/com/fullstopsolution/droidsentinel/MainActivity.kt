@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -37,9 +38,12 @@ import com.fullstopsolution.droidsentinel.auditor.IntegrityAuditor
 import com.fullstopsolution.droidsentinel.auditor.NetworkAuditor
 import com.fullstopsolution.droidsentinel.auditor.StorageInspector
 import com.fullstopsolution.droidsentinel.export.EvidenceExporter
+import com.fullstopsolution.droidsentinel.export.PdfReportExporter
 import com.fullstopsolution.droidsentinel.model.CompleteSecurityAssessment
 import com.fullstopsolution.droidsentinel.model.Finding
 import com.fullstopsolution.droidsentinel.model.Severity
+import com.fullstopsolution.droidsentinel.snapshot.AuditSnapshot
+import com.fullstopsolution.droidsentinel.snapshot.SnapshotStore
 import com.fullstopsolution.droidsentinel.ui.screens.AppsTab
 import com.fullstopsolution.droidsentinel.ui.screens.DashboardScreen
 import com.fullstopsolution.droidsentinel.ui.screens.IntegrityTab
@@ -56,6 +60,7 @@ import com.fullstopsolution.droidsentinel.ui.theme.TextSecondary
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.IOException
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -64,6 +69,10 @@ class MainActivity : ComponentActivity() {
 
     private var assessmentState by mutableStateOf<CompleteSecurityAssessment?>(null)
     private var isScanningState by mutableStateOf(false)
+    private var snapshotsState by mutableStateOf<List<AuditSnapshot>>(emptyList())
+    private var isSavingSnapshotState by mutableStateOf(false)
+    private var isExportingPdfState by mutableStateOf(false)
+    private var snapshotMessageState by mutableStateOf<String?>(null)
 
     private val requestNotificationPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -81,6 +90,11 @@ class MainActivity : ComponentActivity() {
         }
 
         // Run initial scan automatically on launch
+        lifecycleScope.launch {
+            snapshotsState = withContext(Dispatchers.IO) {
+                SnapshotStore(this@MainActivity).loadSnapshots()
+            }
+        }
         runSecurityAudit()
 
         setContent {
@@ -88,12 +102,57 @@ class MainActivity : ComponentActivity() {
                 MainScreen(
                     assessment = assessmentState,
                     isScanning = isScanningState,
+                    snapshots = snapshotsState,
+                    isSavingSnapshot = isSavingSnapshotState,
+                    isExportingPdf = isExportingPdfState,
+                    snapshotMessage = snapshotMessageState,
                     onRunScan = { runSecurityAudit() },
                     onExportEvidence = {
                         assessmentState?.let { EvidenceExporter.shareEvidence(this, it) }
                     },
+                    onExportPdf = { assessmentState?.let { sharePdfReport(it) } },
+                    onSaveSnapshot = { saveCurrentSnapshot() },
                     onRequestStoragePermission = { requestStorageAccess() }
                 )
+            }
+        }
+    }
+
+    private fun saveCurrentSnapshot() {
+        val assessment = assessmentState ?: return
+        if (isSavingSnapshotState) return
+
+        isSavingSnapshotState = true
+        snapshotMessageState = null
+        lifecycleScope.launch {
+            try {
+                snapshotsState = withContext(Dispatchers.IO) {
+                    SnapshotStore(this@MainActivity).saveSnapshot(assessment)
+                }
+                snapshotMessageState = "Snapshot saved locally."
+            } catch (error: IOException) {
+                android.util.Log.e(TAG, "Failed to save audit snapshot.", error)
+                snapshotMessageState = "Unable to save snapshot. Existing history was preserved; verify storage and try again."
+            } finally {
+                isSavingSnapshotState = false
+            }
+        }
+    }
+
+    private fun sharePdfReport(assessment: CompleteSecurityAssessment) {
+        if (isExportingPdfState) return
+        isExportingPdfState = true
+        lifecycleScope.launch {
+            try {
+                val file = withContext(Dispatchers.IO) {
+                    PdfReportExporter.exportToPdf(this@MainActivity, assessment)
+                }
+                PdfReportExporter.sharePdfReport(this@MainActivity, file, assessment)
+            } catch (error: IOException) {
+                android.util.Log.e(TAG, "Failed to generate PDF report.", error)
+                Toast.makeText(this@MainActivity, "Unable to generate PDF report.", Toast.LENGTH_LONG).show()
+            } finally {
+                isExportingPdfState = false
             }
         }
     }
@@ -174,12 +233,20 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+private const val TAG = "MainActivity"
+
 @Composable
 fun MainScreen(
     assessment: CompleteSecurityAssessment?,
     isScanning: Boolean,
+    snapshots: List<AuditSnapshot>,
+    isSavingSnapshot: Boolean,
+    isExportingPdf: Boolean,
+    snapshotMessage: String?,
     onRunScan: () -> Unit,
     onExportEvidence: () -> Unit,
+    onExportPdf: () -> Unit,
+    onSaveSnapshot: () -> Unit,
     onRequestStoragePermission: () -> Unit
 ) {
     var selectedTab by remember { mutableIntStateOf(0) }
@@ -234,8 +301,14 @@ fun MainScreen(
                 0 -> DashboardScreen(
                     assessment = assessment,
                     isScanning = isScanning,
+                    snapshots = snapshots,
+                    isSavingSnapshot = isSavingSnapshot,
+                    isExportingPdf = isExportingPdf,
+                    snapshotMessage = snapshotMessage,
                     onRunScan = onRunScan,
                     onExportEvidence = onExportEvidence,
+                    onExportPdf = onExportPdf,
+                    onSaveSnapshot = onSaveSnapshot,
                     onNavigateTab = { selectedTab = it }
                 )
                 1 -> IntegrityTab(assessment = assessment)
