@@ -2,6 +2,7 @@ package com.fullstopsolution.droidsentinel.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,13 +12,22 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Security
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
@@ -36,6 +46,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.fullstopsolution.droidsentinel.auditor.NetworkAuditor
+import com.fullstopsolution.droidsentinel.model.ActionType
 import com.fullstopsolution.droidsentinel.model.AppThreatInfo
 import com.fullstopsolution.droidsentinel.model.CompleteSecurityAssessment
 import com.fullstopsolution.droidsentinel.model.Finding
@@ -55,7 +66,10 @@ import com.fullstopsolution.droidsentinel.ui.theme.TextPrimary
 import com.fullstopsolution.droidsentinel.ui.theme.TextSecondary
 
 @Composable
-fun IntegrityTab(assessment: CompleteSecurityAssessment?) {
+fun IntegrityTab(
+    assessment: CompleteSecurityAssessment?,
+    onExecuteAction: (Finding) -> Unit = {}
+) {
     LazyColumn(
         modifier = Modifier
             .fillMaxSize()
@@ -90,12 +104,13 @@ fun IntegrityTab(assessment: CompleteSecurityAssessment?) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     IntegrityRow("Root / Jailbreak Binary Status", if (integrity.isRooted) "COMPROMISED" else "CLEAN (No SU)", !integrity.isRooted)
                     IntegrityRow("SELinux Security Module", integrity.selinuxMode, integrity.selinuxMode == "Enforcing")
-                    IntegrityRow("OS Build Certificate", if (integrity.buildTags.contains("test-keys")) "TEST-KEYS (Custom)" else "RELEASE-KEYS (Official)", !integrity.buildTags.contains("test-keys"))
+                    IntegrityRow("OS Build Certificate", if (integrity.isTestKeysBuild) "TEST-KEYS (Custom)" else "RELEASE-KEYS (Official)", !integrity.isTestKeysBuild)
                     IntegrityRow("USB Debugging (ADB)", if (integrity.isAdbEnabled) "ENABLED (Risk)" else "DISABLED (Safe)", !integrity.isAdbEnabled)
                     IntegrityRow("Wireless ADB over Wi-Fi", if (integrity.isAdbWifiEnabled) "ACTIVE (Critical)" else "DISABLED (Safe)", !integrity.isAdbWifiEnabled)
                     IntegrityRow("Device Screen Lock Keyguard", if (integrity.isDeviceLocked) "SECURE (PIN/Biometrics)" else "INSECURE (No Lock)", integrity.isDeviceLocked)
+                    IntegrityRow("Hardware Keystore (TEE)", if (integrity.isKeystoreHardwareBacked) "HARDWARE-BACKED" else "SOFTWARE EMULATED", integrity.isKeystoreHardwareBacked)
                     IntegrityRow("Dedicated StrongBox HSM", if (integrity.hasStrongBox) "SUPPORTED" else "NOT PRESENT (TEE)", true)
-                    IntegrityRow("Hardware Keystore Provider", if (integrity.hasHardwareKeystore) "ACTIVE" else "FAILED", integrity.hasHardwareKeystore)
+                    IntegrityRow("Biometric Authentication", integrity.biometricStatus, integrity.biometricStatus.contains("Enrolled"))
                 }
             }
 
@@ -112,7 +127,7 @@ fun IntegrityTab(assessment: CompleteSecurityAssessment?) {
             }
 
             items(integrity.findings) { finding ->
-                FindingItemCard(finding = finding)
+                FindingItemCard(finding = finding, onExecuteAction = onExecuteAction)
             }
 
             item {
@@ -124,7 +139,7 @@ fun IntegrityTab(assessment: CompleteSecurityAssessment?) {
                     color = CyberCardElevated
                 ) {
                     Text(
-                        text = "Note: Standard user-space apps are restricted by the Android Linux sandbox from reading raw block partitions or kernel ring buffers directly. For hardware Knox attestation and verified boot flags, also maintain Samsung Knox / Google Play Protect enabled.",
+                        text = "Zero-Cloud Sandbox Architecture: Standard user-space apps are restricted by the Android Linux sandbox from reading raw storage blocks or unconfined kernel logs. Hardware Knox/Verified Boot verification requires stock firmware with Google Play Protect enabled.",
                         color = TextMuted,
                         fontSize = 11.sp,
                         lineHeight = 15.sp,
@@ -137,8 +152,12 @@ fun IntegrityTab(assessment: CompleteSecurityAssessment?) {
 }
 
 @Composable
-fun AppsTab(assessment: CompleteSecurityAssessment?) {
+fun AppsTab(
+    assessment: CompleteSecurityAssessment?,
+    onExecuteAction: (Finding) -> Unit = {}
+) {
     var selectedFilter by remember { mutableStateOf("ALL") }
+    var appSearchQuery by remember { mutableStateOf("") }
 
     LazyColumn(
         modifier = Modifier
@@ -171,35 +190,63 @@ fun AppsTab(assessment: CompleteSecurityAssessment?) {
             val appAudit = assessment.appAudit
 
             item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    FilterPill("ALL (${appAudit.totalAppsScanned})", selectedFilter == "ALL") { selectedFilter = "ALL" }
-                    FilterPill("HIGH RISK (${appAudit.highRiskApps.size})", selectedFilter == "HIGH_RISK") { selectedFilter = "HIGH_RISK" }
-                    FilterPill("SIDELOAD (${appAudit.sideloadedApps.size})", selectedFilter == "SIDELOAD") { selectedFilter = "SIDELOAD" }
-                    FilterPill("AUTORUN (${appAudit.autorunApps.size})", selectedFilter == "AUTORUN") { selectedFilter = "AUTORUN" }
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    // App Search Box
+                    OutlinedTextField(
+                        value = appSearchQuery,
+                        onValueChange = { appSearchQuery = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("Search by name or package...", color = TextMuted, fontSize = 12.sp) },
+                        leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search", tint = CyanAccent, modifier = Modifier.size(18.dp)) },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = CyanAccent,
+                            unfocusedBorderColor = CyberBorder,
+                            focusedTextColor = TextPrimary,
+                            unfocusedTextColor = TextPrimary
+                        ),
+                        shape = RoundedCornerShape(10.dp)
+                    )
+
+                    // Filter Pills
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        FilterPill("ALL (${appAudit.totalAppsScanned})", selectedFilter == "ALL") { selectedFilter = "ALL" }
+                        FilterPill("HIGH RISK (${appAudit.highRiskApps.size})", selectedFilter == "HIGH_RISK") { selectedFilter = "HIGH_RISK" }
+                        FilterPill("SIDELOAD (${appAudit.sideloadedApps.size})", selectedFilter == "SIDELOAD") { selectedFilter = "SIDELOAD" }
+                        FilterPill("CLEARTEXT (${appAudit.cleartextApps.size})", selectedFilter == "CLEARTEXT") { selectedFilter = "CLEARTEXT" }
+                        FilterPill("AUTORUN (${appAudit.autorunApps.size})", selectedFilter == "AUTORUN") { selectedFilter = "AUTORUN" }
+                    }
                 }
             }
 
-            val filteredList = when (selectedFilter) {
+            val baseList = when (selectedFilter) {
                 "HIGH_RISK" -> appAudit.highRiskApps
                 "SIDELOAD" -> appAudit.sideloadedApps
+                "CLEARTEXT" -> appAudit.cleartextApps
                 "AUTORUN" -> appAudit.autorunApps
-                else -> appAudit.sideloadedApps + appAudit.highRiskApps
+                else -> appAudit.sideloadedApps + appAudit.highRiskApps + appAudit.cleartextApps
             }.distinctBy { it.packageName }
+
+            val filteredList = baseList.filter { app ->
+                appSearchQuery.isBlank() ||
+                        app.appName.contains(appSearchQuery, ignoreCase = true) ||
+                        app.packageName.contains(appSearchQuery, ignoreCase = true)
+            }
 
             if (filteredList.isEmpty()) {
                 item {
                     Text(
-                        text = "No applications matching this filter category.",
+                        text = "No applications matching this filter query.",
                         color = TextSecondary,
                         modifier = Modifier.padding(vertical = 12.dp)
                     )
                 }
             } else {
                 items(filteredList) { app ->
-                    AppDetailCard(app = app)
+                    AppDetailCard(app = app, onExecuteAction = onExecuteAction)
                 }
             }
         }
@@ -247,7 +294,7 @@ fun StorageTab(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(12.dp))
-                            .border(1.dp, CyberBorder, RoundedCornerShape(12.dp)),
+                            .border(1.dp, StatusWarning.copy(alpha = 0.5f), RoundedCornerShape(12.dp)),
                         color = CyberCard
                     ) {
                         Column(
@@ -261,7 +308,7 @@ fun StorageTab(
                                 fontWeight = FontWeight.Bold
                             )
                             Text(
-                                text = "Grant All Files Access to inspect user /Download for embedded VBA macros in Office files (.docm, .xlsm), autorun scripts (.vbs, .bat), and fake update APK payloads.",
+                                text = "Grant All Files Access to inspect user downloads for embedded VBA macros in Office files (.docm, .xlsm), autorun scripts (.vbs, .bat), and deceptive update APK payloads.",
                                 color = TextSecondary,
                                 fontSize = 12.sp
                             )
@@ -278,7 +325,7 @@ fun StorageTab(
             } else {
                 item {
                     Text(
-                        text = "Scanned ${storage.filesScannedCount} files in Download storage.",
+                        text = "Scanned ${storage.filesScannedCount} files in Download storage directory.",
                         color = TextSecondary,
                         fontSize = 13.sp
                     )
@@ -295,7 +342,7 @@ fun StorageTab(
                         ) {
                             Column(modifier = Modifier.padding(16.dp)) {
                                 Text("No Threat Payloads Identified", color = StatusSecure, fontWeight = FontWeight.Bold)
-                                Text("All scanned Office documents and files are free of embedded macro binaries.", color = TextSecondary, fontSize = 12.sp)
+                                Text("All scanned Office documents and files are free of embedded macro binaries and deceptive extension payloads.", color = TextSecondary, fontSize = 12.sp)
                             }
                         }
                     }
@@ -308,15 +355,26 @@ fun StorageTab(
                                 .border(1.dp, CyberBorder, RoundedCornerShape(12.dp)),
                             color = CyberCard
                         ) {
-                            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                                 Row(
                                     modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
                                     Text(threat.fileName, color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                                    Text(threat.threatType, color = StatusCritical, fontWeight = FontWeight.Bold, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(4.dp))
+                                            .background(Color(0x33EF4444))
+                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(threat.threatType, color = StatusCritical, fontWeight = FontWeight.Bold, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                                    }
                                 }
                                 Text(threat.details, color = TextSecondary, fontSize = 12.sp)
+                                if (threat.sha256Hash != null) {
+                                    Text("SHA-256: ${threat.sha256Hash}", color = CyanAccent, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
+                                }
                                 Text("Path: ${threat.filePath}", color = TextMuted, fontSize = 10.sp, fontFamily = FontFamily.Monospace)
                             }
                         }
@@ -328,7 +386,10 @@ fun StorageTab(
 }
 
 @Composable
-fun NetworkTab(assessment: CompleteSecurityAssessment?) {
+fun NetworkTab(
+    assessment: CompleteSecurityAssessment?,
+    onExecuteAction: (Finding) -> Unit = {}
+) {
     var testUrl by remember { mutableStateOf("") }
     var urlFindings by remember { mutableStateOf<List<Finding>?>(null) }
 
@@ -370,7 +431,27 @@ fun NetworkTab(assessment: CompleteSecurityAssessment?) {
                         Text("Active Interface Posture", color = TextPrimary, fontWeight = FontWeight.Bold)
                         IntegrityRow("Transport Type", net.connectionType, true)
                         IntegrityRow("VPN Encryption Tunnel", if (net.isVpnActive) "PROTECTED (VPN Active)" else "DIRECT (No VPN)", net.isVpnActive)
-                        IntegrityRow("Private DNS (DoT)", if (net.isPrivateDnsActive) "ENCRYPTED" else "PLAINTEXT / OFF", net.isPrivateDnsActive)
+                        IntegrityRow("Private DNS (DoT)", if (net.isPrivateDnsActive) "ENCRYPTED (${net.privateDnsServer ?: "Auto"})" else "PLAINTEXT / OFF", net.isPrivateDnsActive)
+                        IntegrityRow("Captive Portal Interception", if (net.isCaptivePortal) "DETECTED (Risk)" else "NONE", !net.isCaptivePortal)
+
+                        if (!net.isPrivateDnsActive) {
+                            Button(
+                                onClick = {
+                                    onExecuteAction(
+                                        Finding(
+                                            title = "Enable Private DNS",
+                                            description = "",
+                                            severity = Severity.WARNING,
+                                            actionType = ActionType.OPEN_PRIVATE_DNS_SETTINGS
+                                        )
+                                    )
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = CyanAccent, contentColor = CyberObsidian),
+                                shape = RoundedCornerShape(6.dp)
+                            ) {
+                                Text("Configure Private DNS in Settings", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            }
+                        }
                     }
                 }
             }
@@ -390,7 +471,7 @@ fun NetworkTab(assessment: CompleteSecurityAssessment?) {
                     verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
                     Text("Interactive Phishing & Link Analyzer", color = TextPrimary, fontWeight = FontWeight.Bold)
-                    Text("Paste any web link or message URL to test against on-device phishing heuristics (Punycode, shorteners, IPv4 hosts, brand spoofing).", color = TextSecondary, fontSize = 12.sp)
+                    Text("Test any URL against 10 on-device phishing heuristics (Punycode, '@' redirects, cleartext HTTP, hex IPs, brand spoofing).", color = TextSecondary, fontSize = 12.sp)
 
                     OutlinedTextField(
                         value = testUrl,
@@ -403,8 +484,33 @@ fun NetworkTab(assessment: CompleteSecurityAssessment?) {
                             unfocusedBorderColor = CyberBorder,
                             focusedTextColor = TextPrimary,
                             unfocusedTextColor = TextPrimary
-                        )
+                        ),
+                        shape = RoundedCornerShape(10.dp)
                     )
+
+                    // Preset Test Buttons
+                    Text("Quick Preset Tests:", color = TextMuted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        PresetPill("Punycode") {
+                            testUrl = "https://xn--pple-43d.com/login"
+                            urlFindings = NetworkAuditor.analyzeUrl(testUrl)
+                        }
+                        PresetPill("@ Redirect") {
+                            testUrl = "https://bank.com@phish-login.xyz/auth"
+                            urlFindings = NetworkAuditor.analyzeUrl(testUrl)
+                        }
+                        PresetPill("Brand Spoof") {
+                            testUrl = "https://paypal.com.verify-user.xyz/signin"
+                            urlFindings = NetworkAuditor.analyzeUrl(testUrl)
+                        }
+                        PresetPill("Raw IP") {
+                            testUrl = "http://192.168.1.1/admin"
+                            urlFindings = NetworkAuditor.analyzeUrl(testUrl)
+                        }
+                    }
 
                     Button(
                         onClick = { urlFindings = NetworkAuditor.analyzeUrl(testUrl) },
@@ -423,9 +529,27 @@ fun NetworkTab(assessment: CompleteSecurityAssessment?) {
                 Text("LINK HEURISTIC VERDICT", color = TextSecondary, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
             }
             items(urlFindings!!) { f ->
-                FindingItemCard(finding = f)
+                FindingItemCard(finding = f, onExecuteAction = onExecuteAction)
             }
         }
+    }
+}
+
+@Composable
+fun PresetPill(text: String, onClick: () -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(6.dp),
+        color = CyberCardElevated,
+        border = androidx.compose.foundation.BorderStroke(1.dp, CyberBorder),
+        modifier = androidx.compose.ui.Modifier.clickable { onClick() }
+    ) {
+        Text(
+            text = text,
+            color = CyanAccent,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+        )
     }
 }
 
@@ -470,7 +594,10 @@ fun FilterPill(text: String, isSelected: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-fun AppDetailCard(app: AppThreatInfo) {
+fun AppDetailCard(
+    app: AppThreatInfo,
+    onExecuteAction: (Finding) -> Unit = {}
+) {
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -480,7 +607,7 @@ fun AppDetailCard(app: AppThreatInfo) {
     ) {
         Column(
             modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -501,9 +628,90 @@ fun AppDetailCard(app: AppThreatInfo) {
             Text(app.packageName, color = TextMuted, fontSize = 11.sp, fontFamily = FontFamily.Monospace)
             Text("Installer: ${app.installerPackage ?: "Direct Sideload"} • Target SDK: ${app.targetSdk}", color = TextSecondary, fontSize = 11.sp)
 
+            // Tags row
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                if (app.isSideloaded) {
+                    SmallTag("SIDELOAD", StatusWarning)
+                }
+                if (app.usesCleartextTraffic) {
+                    SmallTag("CLEARTEXT HTTP", StatusCritical)
+                }
+                if (app.isBootCompleted) {
+                    SmallTag("AUTORUN", StatusInfo)
+                }
+                if (app.exportedComponentsCount > 0) {
+                    SmallTag("EXPORTED IPC: ${app.exportedComponentsCount}", StatusWarning)
+                }
+            }
+
             if (app.dangerousPermissions.isNotEmpty()) {
-                Text("Sensitive Permissions: ${app.dangerousPermissions.joinToString(", ") { it.substringAfterLast(".") }}", color = TextMuted, fontSize = 10.sp)
+                Text("Permissions: ${app.dangerousPermissions.joinToString(", ") { it.substringAfterLast(".") }}", color = TextMuted, fontSize = 10.sp)
+            }
+
+            // Quick Actions: App Info & Uninstall
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End
+            ) {
+                OutlinedButton(
+                    onClick = {
+                        onExecuteAction(
+                            Finding(
+                                title = "App Info",
+                                description = "",
+                                severity = Severity.INFO,
+                                actionType = ActionType.OPEN_APP_SETTINGS,
+                                actionPayload = app.packageName
+                            )
+                        )
+                    },
+                    shape = RoundedCornerShape(6.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = CyanAccent)
+                ) {
+                    Icon(Icons.Default.Info, contentDescription = "Info", modifier = Modifier.size(12.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("App Info", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                }
+
+                Spacer(modifier = Modifier.width(8.dp))
+
+                OutlinedButton(
+                    onClick = {
+                        onExecuteAction(
+                            Finding(
+                                title = "Uninstall App",
+                                description = "",
+                                severity = Severity.CRITICAL,
+                                actionType = ActionType.UNINSTALL_APP,
+                                actionPayload = app.packageName
+                            )
+                        )
+                    },
+                    shape = RoundedCornerShape(6.dp),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = StatusCritical)
+                ) {
+                    Icon(Icons.Default.Delete, contentDescription = "Uninstall", modifier = Modifier.size(12.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Uninstall", fontSize = 10.sp, fontWeight = FontWeight.Bold)
+                }
             }
         }
+    }
+}
+
+@Composable
+fun SmallTag(text: String, color: Color) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(4.dp))
+            .background(color.copy(alpha = 0.15f))
+            .padding(horizontal = 6.dp, vertical = 2.dp)
+    ) {
+        Text(text, color = color, fontSize = 9.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
     }
 }

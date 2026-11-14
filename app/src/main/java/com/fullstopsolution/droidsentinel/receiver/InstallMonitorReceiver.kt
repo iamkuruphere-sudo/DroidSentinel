@@ -50,7 +50,16 @@ class InstallMonitorReceiver : BroadcastReceiver() {
             null
         }
 
-        val isSideloaded = installer == null || (installer != "com.android.vending" && installer != "com.sec.android.app.samsungapps")
+        val trustedStores = setOf(
+            "com.android.vending",
+            "com.sec.android.app.samsungapps",
+            "com.amazon.venezia",
+            "org.fdroid.fdroid",
+            "org.fdroid.fdroid.privileged",
+            "com.xiaomi.mipicks",
+            "com.huawei.appmarket"
+        )
+        val isSideloaded = installer == null || installer !in trustedStores
         val permissions = pkgInfo.requestedPermissions?.toSet() ?: emptySet()
         val hasOverlay = permissions.contains("android.permission.SYSTEM_ALERT_WINDOW")
         val hasAccessibility = permissions.contains("android.permission.BIND_ACCESSIBILITY_SERVICE")

@@ -41,7 +41,7 @@ DroidSentinel is the Android mobile companion to [MacSentinel](https://github.co
 | 📦 **Package ID** | `com.fullstopsolution.droidsentinel` |
 | 🎯 **Target SDK** | Android 17 (API 37) / Min SDK: Android 13 (API 33) |
 | 🔑 **Signing Fingerprint (SHA-256)** | `40:83:42:03:B8:15:A4:3E:70:78:2F:E1:6D:10:BC:DD:84:28:C3:C4:A8:7A:54:83:4D:42:97:B3:91:22:99:30` |
-| 🛡️ **APK Binary Checksum (SHA-256)** | `a9cb7d7da8c4b4858bfdb6440ed4389abf35bde1d36788eff94b2df59d419634` |
+| 🛡️ **APK Binary Checksum (SHA-256)** | `524fa92317be85a649302454f0c03a178f8669a8a183186106ceded6b387b98c` |
 | 📦 **GitHub Releases** | [DroidSentinel Releases](https://github.com/iamkuruphere-sudo/DroidSentinel/releases) |
 | 🍏 **macOS Companion** | [MacSentinel](https://github.com/iamkuruphere-sudo/MacSentinel) |
 | ✉️ **Official Support Desk** | [contact@fullstopsolution.in](mailto:contact@fullstopsolution.in) |
@@ -51,46 +51,56 @@ DroidSentinel is the Android mobile companion to [MacSentinel](https://github.co
 ## Checks Included
 
 ### 1. OS & Firmware Integrity Posture
-* **Multi-Vector Root Detection**: Scans 14 known superuser execution paths (`/sbin/su`, `/system/bin/su`, `/data/adb/ksu`, `/data/adb/magisk`, etc.), checks `su` binary execution in local environment, audits Magisk/KernelSU/APatch package presence and mount namespace isolation.
-* **SELinux Enforcement**: Queries kernel status to ensure SELinux is operating in mandatory `Enforcing` mode rather than `Permissive` or `Disabled`.
-* **Build Integrity**: Analyzes OS build signature tags for developer or custom ROM `test-keys`.
-* **Debug Interfaces**: Audits USB Debugging (`ADB_ENABLED`) and Wireless ADB state.
-* **Hardware Keystore & StrongBox**: Validates cryptographic binding to discrete hardware secure elements (StrongBox HSM / TEE).
-* **Keyguard Security**: Verifies screen lock authentication (Biometrics, PIN, Password).
+* **Multi-Vector Root Detection**: Scans 25+ known superuser execution paths (`/sbin/su`, `/system/bin/su`, `/data/adb/ksu`, `/data/adb/magisk`, `/data/adb/apd`, etc.), checks `su` binary execution in local environment, audits Magisk/KernelSU/APatch package presence, inspects `/proc/mounts` overlay isolation, and verifies kernel version string signatures.
+* **Dynamic Hooking Framework Detection**: Detects LSPosed / Xposed runtime hooks and active class instrumentation.
+* **SELinux Enforcement**: Queries kernel status via `getenforce` and `/sys/fs/selinux/enforce` to ensure SELinux is operating in mandatory `Enforcing` mode rather than `Permissive` or `Disabled`.
+* **Build Integrity**: Analyzes OS build signature tags for developer or custom ROM `test-keys` and dangerous `ro.debuggable` / `ro.secure` system properties.
+* **Debug Interfaces**: Audits USB Debugging (`ADB_ENABLED`) and Wireless ADB state over local Wi-Fi.
+* **Hardware Keystore & StrongBox**: Cryptographically probes physical secure hardware element (StrongBox HSM / TEE) via ephemeral key generation.
+* **Biometric & Keyguard Security**: Evaluates strong biometric hardware enrollment and screen lock authentication (Biometrics, PIN, Password).
 
 ### 2. Application & Sideload Auditing
-* **Sideload Origin Tracking**: Differentiates official store installs (Google Play, Samsung Galaxy Store, F-Droid) from unverified sideloads (web browsers, file managers, local droppers).
+* **Sideload Origin Tracking**: Differentiates official store installs (Google Play, Samsung Galaxy Store, Amazon Appstore, F-Droid, GetApps, AppGallery) from unverified sideloads (web browsers, file managers, local droppers).
 * **High-Risk Permission Clustering**:
   * Screen Overlay / Tapjacking: `SYSTEM_ALERT_WINDOW`
   * Keystroke & Content Scraping: `BIND_ACCESSIBILITY_SERVICE`
   * OTP / SMS Exfiltration Pattern: `READ_SMS` / `RECEIVE_SMS` + `INTERNET`
+  * Audio Surveillance Profile: `RECORD_AUDIO` + `INTERNET`
+  * Camera Surveillance Profile: `CAMERA` + `INTERNET`
   * Dropper / Secondary Payload Execution: `REQUEST_INSTALL_PACKAGES`
+* **Cleartext Network Traffic**: Identifies applications permitting unencrypted HTTP communication (`FLAG_USES_CLEARTEXT_TRAFFIC`).
+* **IPC Attack Surface Analysis**: Scans application components for unprotected exported activities, services, and receivers (`exported=true` without permission gates).
 * **Social Engineering Detection**: Identifies rogue packages masquerading as system or carrier updates (`system update`, `security patch`, `oneui update`).
 * **Debuggable Production Apps**: Detects third-party apps compiled with `android:debuggable="true"`.
 * **Target SDK Deprecation**: Flags applications targeting obsolete Android runtimes to evade modern runtime permission constraints.
 
 ### 3. Storage & Download Threat Inspection
 * **OpenXML Macro Analysis**: Performs ZIP inspection of Word, Excel, and PowerPoint documents (`.docm`, `.xlsm`, `.pptm`, etc.) to isolate weaponized `vbaProject.bin` or `vbaData.xml` macros.
-* **Script & Autorun Vectors**: Flags dangerous executable scripts (`.vbs`, `.bat`, `.cmd`, `.ps1`, `autorun.inf`).
-* **Deceptive Double Extensions**: Detects masquerading payloads (`.pdf.apk`, `.jpg.apk`).
-* **Unverified Standalone APKs**: Inspects downloaded installation packages for archive integrity and package names.
+* **Script & Autorun Vectors**: Flags dangerous executable scripts (`.vbs`, `.bat`, `.cmd`, `.ps1`, `.sh`, `.dex`, `autorun.inf`).
+* **Deceptive Double Extensions**: Detects masquerading payloads (`.pdf.apk`, `.jpg.apk`, `.doc.apk`, `.docx.apk`).
+* **Unverified Standalone APKs**: Inspects downloaded installation packages for archive integrity, package names, and computes cryptographic SHA-256 hashes.
 
 ### 4. Network & Link Phishing Defense
-* **Transport Encryption**: Audits Wi-Fi encryption status (WPA2/WPA3), active VPN tunnels (`TRANSPORT_VPN`), and captive portal interception.
-* **Private DNS (DNS-over-TLS)**: Detects whether device DNS queries are protected against ISP/LAN eavesdropping.
-* **Interactive Phishing Heuristic Engine**:
+* **Transport Encryption**: Audits Wi-Fi encryption status, active VPN tunnels (`TRANSPORT_VPN`), and captive portal interception.
+* **Private DNS (DNS-over-TLS)**: Detects whether device DNS queries are protected against ISP/LAN eavesdropping and reports active DoT provider specifiers.
+* **Interactive Phishing Heuristic Engine (10 Vectors)**:
   * Insecure HTTP cleartext warnings.
   * Deceptive `@` redirect syntax detection (`https://bank.com@phish.xyz`).
-  * Raw numeric IPv4/IPv6 hostname detection.
+  * Raw numeric IPv4/IPv6 hostname detection (`http://192.168.1.1`).
+  * Obfuscated hexadecimal and integer IP hosts (`http://0x7f000001`).
+  * Non-standard phishing proxy ports (`:8080`, `:8888`, `:4444`).
   * Punycode / IDN homograph attack vectors (`xn--`).
+  * Confusable mixed-script Cyrillic homoglyph detection (e.g. Cyrillic lookalikes `а`, `е`, `о`).
   * URL shortener expansion flags (`bit.ly`, `tinyurl.com`, `t.co`, etc.).
+  * Suspicious TLD detection (`.top`, `.xyz`, `.buzz`, `.click`, etc.).
   * Brand spoofing subdomain analysis (`paypal.com.account-verify.xyz`).
 
-### 5. Real-Time Sideload Monitoring
-* Background `InstallMonitorReceiver` dynamically alerts the user when a newly installed application holds privileged overlay or accessibility permissions or arrives from an unverified sideload origin.
-
-### 6. Standardized JSON Evidence Export
-* Exports a complete point-in-time security audit report adhering to Fullstop Solution evidence standards, allowing developers and security auditors to export findings via the Android Sharesheet or ingest into SIEM / compliance pipelines.
+### 5. Usability, Controls & Remediation
+* **Interactive Animated Security Gauge**: Fluid sweep arc with status-dependent gradients, pulsing sonar animation, and dynamic score counter (0–100).
+* **Real-Time Scan Controls**: Live progress indicator with stage-by-stage detail, ability to Pause/Resume, or Cancel scanning at any time.
+* **Quick Remediation Hub**: One-tap direct action buttons linking directly to Android Settings (Developer Options, Screen Lock, Private DNS, Biometrics, App Info, Uninstall).
+* **Multi-Format Evidence Sharing**: Exports full machine-readable JSON, executive Markdown compliance reports, and instant one-click clipboard summaries.
+* **Real-Time Sideload Monitoring**: Background `InstallMonitorReceiver` dynamically alerts the user when a newly installed application holds privileged overlay or accessibility permissions or arrives from an unverified sideload origin.
 
 ---
 

@@ -6,9 +6,11 @@ import android.content.pm.ApplicationInfo
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.os.Build
+import com.fullstopsolution.droidsentinel.model.ActionType
 import com.fullstopsolution.droidsentinel.model.AppAuditResult
 import com.fullstopsolution.droidsentinel.model.AppThreatInfo
 import com.fullstopsolution.droidsentinel.model.Finding
+import com.fullstopsolution.droidsentinel.model.FindingCategory
 import com.fullstopsolution.droidsentinel.model.Severity
 
 object AppThreatAuditor {
@@ -18,48 +20,81 @@ object AppThreatAuditor {
         "com.sec.android.app.samsungapps",   // Samsung Galaxy Store
         "com.amazon.venezia",               // Amazon Appstore
         "org.fdroid.fdroid",                // F-Droid Official
-        "org.fdroid.fdroid.privileged"
+        "org.fdroid.fdroid.privileged",
+        "com.xiaomi.mipicks",               // Xiaomi GetApps
+        "com.huawei.appmarket",             // Huawei AppGallery
+        "com.heytap.market",                // Oppo App Market
+        "com.vivo.appstore"                 // Vivo App Store
     )
 
     private val SUSPICIOUS_UPDATE_KEYWORDS = listOf(
         "system update", "software update", "android update",
         "firmware update", "security patch", "google update",
-        "chrome update", "play update", "samsung update"
+        "chrome update", "play update", "samsung update",
+        "device update", "play protect update", "oneui update"
     )
 
-    fun audit(context: Context): AppAuditResult {
+    fun audit(
+        context: Context,
+        onProgress: ((scanned: Int, total: Int, currentPkg: String) -> Unit)? = null
+    ): AppAuditResult {
         val pm = context.packageManager
         val myPackage = context.packageName
 
         // Discover boot-completed receivers
         val bootPackages = queryBootReceivers(pm)
 
-        val flags = PackageManager.GET_PERMISSIONS or PackageManager.GET_META_DATA
-        val packages: List<PackageInfo> = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            pm.getInstalledPackages(PackageManager.PackageInfoFlags.of(flags.toLong()))
-        } else {
-            @Suppress("DEPRECATION")
-            pm.getInstalledPackages(flags)
+        val flags = PackageManager.GET_PERMISSIONS or
+                PackageManager.GET_META_DATA or
+                PackageManager.GET_ACTIVITIES or
+                PackageManager.GET_SERVICES or
+                PackageManager.GET_RECEIVERS or
+                PackageManager.GET_PROVIDERS
+
+        val packages: List<PackageInfo> = try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                pm.getInstalledPackages(PackageManager.PackageInfoFlags.of(flags.toLong()))
+            } else {
+                @Suppress("DEPRECATION")
+                pm.getInstalledPackages(flags)
+            }
+        } catch (_: Exception) {
+            emptyList()
         }
 
         val allThreatApps = mutableListOf<AppThreatInfo>()
         val generalFindings = mutableListOf<Finding>()
+        val totalCount = packages.size
 
+        var index = 0
         for (pkg in packages) {
+            index++
             val appInfo = pkg.applicationInfo ?: continue
             val isSystem = (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0
 
-            // Skip ourselves and system packages for sideload audits
+            // Report real-time scanning progress
+            onProgress?.invoke(index, totalCount, pkg.packageName)
+
+            // Skip ourselves and system packages for third-party posture audits
             if (isSystem || pkg.packageName == myPackage) continue
 
-            val appLabel = appInfo.loadLabel(pm).toString()
+            val appLabel = try {
+                appInfo.loadLabel(pm).toString()
+            } catch (_: Exception) {
+                pkg.packageName
+            }
+
             val installer = getInstaller(pm, pkg.packageName)
             val isSideloaded = installer == null || installer !in TRUSTED_STORE_INSTALLERS
             val isDebuggable = (appInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+            val usesCleartextTraffic = (appInfo.flags and ApplicationInfo.FLAG_USES_CLEARTEXT_TRAFFIC) != 0
             val isBootCompleted = bootPackages.contains(pkg.packageName)
 
             val permissions = pkg.requestedPermissions?.toList() ?: emptyList()
             val dangerousPerms = permissions.filter { isDangerousPermission(it) }
+
+            // Count unprotected exported components (IPC attack surface)
+            val exportedCount = countUnprotectedExportedComponents(pkg)
 
             val appRiskFindings = mutableListOf<Finding>()
             var riskScore = 0
@@ -70,68 +105,126 @@ object AppThreatAuditor {
                 appRiskFindings.add(
                     Finding(
                         title = "Sideloaded App",
-                        description = "App was not installed from Google Play or Galaxy Store (installer: ${installer ?: "Manual/Direct"}).",
+                        description = "App was not installed from official store (installer: ${installer ?: "Manual/Direct Sideload"}).",
                         severity = Severity.WARNING,
-                        recommendation = "Verify publisher legitimacy before granting sensitive permissions."
+                        recommendation = "Verify publisher legitimacy before granting sensitive permissions.",
+                        actionType = ActionType.OPEN_APP_SETTINGS,
+                        actionPayload = pkg.packageName,
+                        actionLabel = "Inspect App",
+                        category = FindingCategory.APPS
                     )
                 )
             }
 
-            // 2. Debuggable release
+            // 2. Debuggable production release
             if (isDebuggable) {
                 riskScore += 35
                 appRiskFindings.add(
                     Finding(
                         title = "Debuggable Production App",
-                        description = "App was compiled with android:debuggable='true', allowing JDWP debugger attachment and memory dumping.",
+                        description = "Compiled with android:debuggable='true', permitting JDWP debugger attachment and memory extraction.",
                         severity = Severity.CRITICAL,
-                        recommendation = "Uninstall or replace with a hardened release build."
+                        recommendation = "Uninstall or replace with hardened release build.",
+                        actionType = ActionType.UNINSTALL_APP,
+                        actionPayload = pkg.packageName,
+                        actionLabel = "Uninstall",
+                        category = FindingCategory.APPS
                     )
                 )
             }
 
-            // 3. Update-impersonation
+            // 3. Update-impersonation heuristics
             val lowerLabel = appLabel.lowercase()
             for (kw in SUSPICIOUS_UPDATE_KEYWORDS) {
-                if (lowerLabel.contains(kw) && !pkg.packageName.startsWith("com.google.") && !pkg.packageName.startsWith("com.sec.")) {
+                if (lowerLabel.contains(kw) &&
+                    !pkg.packageName.startsWith("com.google.") &&
+                    !pkg.packageName.startsWith("com.sec.") &&
+                    !pkg.packageName.startsWith("com.samsung.")
+                ) {
                     riskScore += 45
                     appRiskFindings.add(
                         Finding(
                             title = "Update Impersonation Vector",
-                            description = "App label '$appLabel' mimics a system update service.",
+                            description = "App label '$appLabel' mimics a system update service ($kw).",
                             severity = Severity.CRITICAL,
-                            recommendation = "High likelihood of social engineering malware. Review carefully."
+                            recommendation = "High likelihood of social engineering malware. Uninstall immediately.",
+                            actionType = ActionType.UNINSTALL_APP,
+                            actionPayload = pkg.packageName,
+                            actionLabel = "Uninstall",
+                            category = FindingCategory.APPS
                         )
                     )
                     break
                 }
             }
 
-            // 4. Permission Clustering: Overlay / Tapjacking
+            // 4. Cleartext Traffic Allowed
+            if (usesCleartextTraffic) {
+                riskScore += 15
+                appRiskFindings.add(
+                    Finding(
+                        title = "Cleartext HTTP Traffic Permitted",
+                        description = "App permits unencrypted HTTP network communication susceptible to MITM sniffing.",
+                        severity = Severity.WARNING,
+                        recommendation = "Enforce HTTPS TLS-only network security config.",
+                        actionType = ActionType.OPEN_APP_SETTINGS,
+                        actionPayload = pkg.packageName,
+                        actionLabel = "Inspect App",
+                        category = FindingCategory.APPS
+                    )
+                )
+            }
+
+            // 5. Unprotected Exported IPC Components
+            if (exportedCount > 0) {
+                riskScore += (exportedCount * 5).coerceAtMost(20)
+                appRiskFindings.add(
+                    Finding(
+                        title = "$exportedCount Unprotected Exported Component(s)",
+                        description = "App exposes $exportedCount activities, services, or receivers without required permissions.",
+                        severity = Severity.WARNING,
+                        recommendation = "Third-party malware on the device can invoke these components directly.",
+                        actionType = ActionType.OPEN_APP_SETTINGS,
+                        actionPayload = pkg.packageName,
+                        actionLabel = "Inspect App",
+                        category = FindingCategory.APPS
+                    )
+                )
+            }
+
+            // 6. Permission Clustering: Overlay / Tapjacking
             if (permissions.contains("android.permission.SYSTEM_ALERT_WINDOW")) {
                 riskScore += 20
                 appRiskFindings.add(
                     Finding(
                         title = "Screen Overlay Capability",
-                        description = "Can draw over other applications (Tapjacking / credential phishing risk).",
-                        severity = Severity.WARNING
+                        description = "Can draw over other applications (Tapjacking & credential spoofing risk).",
+                        severity = Severity.WARNING,
+                        actionType = ActionType.OPEN_APP_SETTINGS,
+                        actionPayload = pkg.packageName,
+                        actionLabel = "Manage Permissions",
+                        category = FindingCategory.APPS
                     )
                 )
             }
 
-            // 5. Permission Clustering: Accessibility Abuse
+            // 7. Permission Clustering: Accessibility Abuse
             if (permissions.contains("android.permission.BIND_ACCESSIBILITY_SERVICE")) {
                 riskScore += 30
                 appRiskFindings.add(
                     Finding(
                         title = "Accessibility Service Hook",
-                        description = "Declares accessibility binding capable of reading screen content and keystrokes.",
-                        severity = Severity.CRITICAL
+                        description = "Declares accessibility binding capable of reading keystrokes and screen content.",
+                        severity = Severity.CRITICAL,
+                        actionType = ActionType.OPEN_APP_SETTINGS,
+                        actionPayload = pkg.packageName,
+                        actionLabel = "Review Hook",
+                        category = FindingCategory.APPS
                     )
                 )
             }
 
-            // 6. Permission Clustering: OTP / SMS + Internet
+            // 8. Permission Clustering: OTP / SMS + Internet
             val hasSms = permissions.any { it.contains("SMS") }
             val hasInternet = permissions.contains("android.permission.INTERNET")
             if (hasSms && hasInternet) {
@@ -140,36 +233,90 @@ object AppThreatAuditor {
                     Finding(
                         title = "SMS Interception & Internet Access",
                         description = "App holds both SMS read/receive permissions and outbound internet access (OTP stealer profile).",
-                        severity = Severity.WARNING
+                        severity = Severity.CRITICAL,
+                        actionType = ActionType.OPEN_APP_SETTINGS,
+                        actionPayload = pkg.packageName,
+                        actionLabel = "Inspect App",
+                        category = FindingCategory.APPS
                     )
                 )
             }
 
-            // 7. Dropper: Request Install Packages
+            // 9. Permission Clustering: Audio/Camera + Internet
+            val hasAudio = permissions.contains("android.permission.RECORD_AUDIO")
+            val hasCamera = permissions.contains("android.permission.CAMERA")
+            if (hasAudio && hasInternet && isSideloaded) {
+                riskScore += 25
+                appRiskFindings.add(
+                    Finding(
+                        title = "Audio Surveillance Vector",
+                        description = "Sideloaded app holds microphone recording and internet transmission permissions.",
+                        severity = Severity.WARNING,
+                        actionType = ActionType.OPEN_APP_SETTINGS,
+                        actionPayload = pkg.packageName,
+                        actionLabel = "Inspect App",
+                        category = FindingCategory.APPS
+                    )
+                )
+            }
+            if (hasCamera && hasInternet && isSideloaded) {
+                riskScore += 25
+                appRiskFindings.add(
+                    Finding(
+                        title = "Camera Surveillance Vector",
+                        description = "Sideloaded app holds camera capture and internet transmission permissions.",
+                        severity = Severity.WARNING,
+                        actionType = ActionType.OPEN_APP_SETTINGS,
+                        actionPayload = pkg.packageName,
+                        actionLabel = "Inspect App",
+                        category = FindingCategory.APPS
+                    )
+                )
+            }
+
+            // 10. Dropper: Request Install Packages
             if (permissions.contains("android.permission.REQUEST_INSTALL_PACKAGES")) {
                 riskScore += 20
                 appRiskFindings.add(
                     Finding(
                         title = "Application Dropper / Package Installer",
-                        description = "App holds permission to request installation of secondary APK packages.",
-                        severity = Severity.WARNING
+                        description = "Holds permission to request installation of secondary APK packages.",
+                        severity = Severity.WARNING,
+                        actionType = ActionType.OPEN_APP_SETTINGS,
+                        actionPayload = pkg.packageName,
+                        actionLabel = "Inspect App",
+                        category = FindingCategory.APPS
                     )
                 )
             }
 
-            // 8. Low Target SDK
+            // 11. Low Target SDK
             if (appInfo.targetSdkVersion < 31) {
-                riskScore += 15
+                riskScore += 20
                 appRiskFindings.add(
                     Finding(
-                        title = "Outdated Target SDK (${appInfo.targetSdkVersion})",
-                        description = "Targets legacy Android runtime, bypassing modern permission restrictions.",
-                        severity = Severity.WARNING
+                        title = "Obsolete Target SDK (${appInfo.targetSdkVersion})",
+                        description = "Targets legacy Android runtime, evading modern runtime permissions and background start limits.",
+                        severity = Severity.CRITICAL,
+                        actionType = ActionType.OPEN_APP_SETTINGS,
+                        actionPayload = pkg.packageName,
+                        actionLabel = "Inspect App",
+                        category = FindingCategory.APPS
+                    )
+                )
+            } else if (appInfo.targetSdkVersion < 34) {
+                riskScore += 10
+                appRiskFindings.add(
+                    Finding(
+                        title = "Target SDK Below Android 14 (${appInfo.targetSdkVersion})",
+                        description = "Targets older Android SDK below Android 14 security baseline.",
+                        severity = Severity.INFO,
+                        category = FindingCategory.APPS
                     )
                 )
             }
 
-            // 9. Boot Persistence
+            // 12. Boot Persistence
             if (isBootCompleted) {
                 riskScore += 10
             }
@@ -183,6 +330,8 @@ object AppThreatAuditor {
                 isSideloaded = isSideloaded,
                 isDebuggable = isDebuggable,
                 isBootCompleted = isBootCompleted,
+                usesCleartextTraffic = usesCleartextTraffic,
+                exportedComponentsCount = exportedCount,
                 dangerousPermissions = dangerousPerms,
                 riskFindings = appRiskFindings,
                 riskScore = riskScore
@@ -194,14 +343,18 @@ object AppThreatAuditor {
         val sideloaded = allThreatApps.filter { it.isSideloaded }
         val highRisk = allThreatApps.filter { it.riskScore >= 40 }
         val autorun = allThreatApps.filter { it.isBootCompleted }
+        val cleartext = allThreatApps.filter { it.usesCleartextTraffic }
 
         if (highRisk.isNotEmpty()) {
             generalFindings.add(
                 Finding(
                     title = "${highRisk.size} High-Risk Application(s) Identified",
-                    description = "Detected apps with dangerous permission clusters or impersonation heuristics.",
+                    description = "Detected apps with dangerous permission clusters, update impersonation, or debuggable binaries.",
                     severity = Severity.CRITICAL,
-                    recommendation = "Inspect the Apps tab and revoke unneeded permissions or remove untrusted software."
+                    recommendation = "Review the Apps tab to revoke permissions or uninstall suspicious software.",
+                    actionType = ActionType.OPEN_PLAY_PROTECT,
+                    actionLabel = "Play Protect",
+                    category = FindingCategory.APPS
                 )
             )
         }
@@ -211,8 +364,20 @@ object AppThreatAuditor {
                 Finding(
                     title = "${sideloaded.size} Sideloaded Application(s)",
                     description = "Applications installed from non-official sources bypass automated store scanning.",
+                    severity = Severity.WARNING,
+                    recommendation = "Keep Google Play Protect and Knox scanning active.",
+                    category = FindingCategory.APPS
+                )
+            )
+        }
+
+        if (cleartext.isNotEmpty()) {
+            generalFindings.add(
+                Finding(
+                    title = "${cleartext.size} App(s) Allow Cleartext HTTP",
+                    description = "Identified applications permitting unencrypted HTTP traffic.",
                     severity = Severity.INFO,
-                    recommendation = "Keep Google Play Protect and Knox scanning active."
+                    category = FindingCategory.APPS
                 )
             )
         }
@@ -222,6 +387,7 @@ object AppThreatAuditor {
             sideloadedApps = sideloaded,
             highRiskApps = highRisk,
             autorunApps = autorun,
+            cleartextApps = cleartext,
             findings = generalFindings
         )
     }
@@ -250,6 +416,23 @@ object AppThreatAuditor {
         return receivers.mapNotNull { it.activityInfo?.packageName }.toSet()
     }
 
+    private fun countUnprotectedExportedComponents(pkg: PackageInfo): Int {
+        var count = 0
+        pkg.activities?.forEach {
+            if (it.exported && it.permission.isNullOrEmpty()) count++
+        }
+        pkg.services?.forEach {
+            if (it.exported && it.permission.isNullOrEmpty()) count++
+        }
+        pkg.receivers?.forEach {
+            if (it.exported && it.permission.isNullOrEmpty()) count++
+        }
+        pkg.providers?.forEach {
+            if (it.exported && it.readPermission.isNullOrEmpty() && it.writePermission.isNullOrEmpty()) count++
+        }
+        return count
+    }
+
     private fun isDangerousPermission(perm: String): Boolean {
         return perm.contains("SMS") ||
                 perm.contains("CONTACTS") ||
@@ -259,6 +442,8 @@ object AppThreatAuditor {
                 perm.contains("ACCESS_BACKGROUND_LOCATION") ||
                 perm.contains("SYSTEM_ALERT_WINDOW") ||
                 perm.contains("BIND_ACCESSIBILITY_SERVICE") ||
-                perm.contains("REQUEST_INSTALL_PACKAGES")
+                perm.contains("REQUEST_INSTALL_PACKAGES") ||
+                perm.contains("READ_CALL_LOG") ||
+                perm.contains("QUERY_ALL_PACKAGES")
     }
 }
