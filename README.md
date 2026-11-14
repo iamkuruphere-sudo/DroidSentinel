@@ -1,6 +1,30 @@
+<p align="center">
+  <a href="https://www.fullstopsolution.in">
+    <img src="https://raw.githubusercontent.com/iamkuruphere-sudo/fullstopsolution-website/main/assets/images/fullstop-banner.svg" alt="Fullstop Solution" width="760">
+  </a>
+</p>
+
+<p align="center">
+  <a href="mailto:contact@fullstopsolution.in" style="font-weight:700; color:#38bdf8; text-decoration:none;">
+    ✉️ Official Inquiries & Support Desk: <strong>contact@fullstopsolution.in</strong>
+  </a>
+</p>
+
+<p align="center">
+  <img src="Resources/logo-banner.svg" alt="DroidSentinel Banner" width="760">
+</p>
+
+<p align="center">
+  <a href="https://www.fullstopsolution.in"><img src="https://img.shields.io/badge/Official%20Website-fullstopsolution.in-cyan?style=for-the-badge&logo=googlechrome&logoColor=white" alt="Official Website"></a>
+  <a href="https://github.com/iamkuruphere-sudo/DroidSentinel/releases/latest"><img src="https://img.shields.io/badge/Download%20APK-v1.0.0%20(Android)-brightgreen?style=for-the-badge&logo=android&logoColor=white" alt="Download APK"></a>
+  <a href="https://github.com/iamkuruphere-sudo/DroidSentinel/releases/latest"><img src="https://img.shields.io/badge/GitHub%20Release-v1.0.0-blue?style=for-the-badge&logo=github&logoColor=white" alt="GitHub Release"></a>
+  <a href="https://www.fullstopsolution.in/security.html"><img src="https://img.shields.io/badge/Architecture-Zero--Telemetry-purple?style=for-the-badge" alt="Zero Telemetry"></a>
+  <a href="mailto:contact@fullstopsolution.in"><img src="https://img.shields.io/badge/Contact-contact%40fullstopsolution.in-blueviolet?style=for-the-badge&logo=maildotru&logoColor=white" alt="Email Contact"></a>
+</p>
+
 # DroidSentinel
 
-**Part of the [Fullstop Solution](https://www.fullstopsolution.in) precision software ecosystem.**
+Part of the **[Fullstop Solution](https://www.fullstopsolution.in)** precision software ecosystem.
 
 An enterprise-grade, point-in-time, read-only Android mobile endpoint security auditing and evidence collection app. Built natively in Kotlin with Jetpack Compose & Material 3.
 
@@ -12,13 +36,15 @@ DroidSentinel is the Android mobile companion to [MacSentinel](https://github.co
 
 | Resource | Value / Link |
 | :--- | :--- |
-| **Release APK** | `DroidSentinel-release.apk` (v1.0.0) |
-| **Package ID** | `com.fullstopsolution.droidsentinel` |
-| **Target SDK** | Android 17 (API 37) / Min SDK: Android 13 (API 33) |
-| **Signing Fingerprint (SHA-256)** | `40:83:42:03:B8:15:A4:3E:70:78:2F:E1:6D:10:BC:DD:84:28:C3:C4:A8:7A:54:83:4D:42:97:B3:91:22:99:30` |
-| **APK Binary Checksum (SHA-256)** | `a9cb7d7da8c4b4858bfdb6440ed4389abf35bde1d36788eff94b2df59d419634` |
-| **GitHub Releases** | [DroidSentinel Releases](https://github.com/iamkuruphere-sudo/DroidSentinel/releases) |
-| **Official Ecosystem** | [Fullstop Solution Mobile & Desktop Suites](https://www.fullstopsolution.in) |
+| 🌐 **Official Ecosystem** | [Fullstop Solution Web & Desktop Suites](https://www.fullstopsolution.in) |
+| 🤖 **Release APK** | [`DroidSentinel-release.apk`](https://github.com/iamkuruphere-sudo/DroidSentinel/releases/latest) (v1.0.0) |
+| 📦 **Package ID** | `com.fullstopsolution.droidsentinel` |
+| 🎯 **Target SDK** | Android 17 (API 37) / Min SDK: Android 13 (API 33) |
+| 🔑 **Signing Fingerprint (SHA-256)** | `40:83:42:03:B8:15:A4:3E:70:78:2F:E1:6D:10:BC:DD:84:28:C3:C4:A8:7A:54:83:4D:42:97:B3:91:22:99:30` |
+| 🛡️ **APK Binary Checksum (SHA-256)** | `a9cb7d7da8c4b4858bfdb6440ed4389abf35bde1d36788eff94b2df59d419634` |
+| 📦 **GitHub Releases** | [DroidSentinel Releases](https://github.com/iamkuruphere-sudo/DroidSentinel/releases) |
+| 🍏 **macOS Companion** | [MacSentinel](https://github.com/iamkuruphere-sudo/MacSentinel) |
+| ✉️ **Official Support Desk** | [contact@fullstopsolution.in](mailto:contact@fullstopsolution.in) |
 
 ---
 
@@ -128,5 +154,14 @@ The signed release APK will be generated at:
 ## 🔒 Zero Telemetry Guarantee
 
 100% on-device client execution. DroidSentinel contains zero analytics SDKs, zero advertising identifiers, zero tracking beacons, and zero outbound network transmission. All evidence reports remain strictly local until explicitly exported by the user.
+
+---
+
+## 📬 Official Support & Inquiries
+
+For technical support, licensing, or confidential security disclosures:
+* ✉️ **Email Desk:** [contact@fullstopsolution.in](mailto:contact@fullstopsolution.in)
+* 🌐 **Web Portal:** [https://www.fullstopsolution.in](https://www.fullstopsolution.in)
+* 🛡️ **Zero-Knowledge Security Architecture:** [https://www.fullstopsolution.in/security.html](https://www.fullstopsolution.in/security.html)
 
 © 2026 [Fullstop Solution](https://www.fullstopsolution.in). All rights reserved.
